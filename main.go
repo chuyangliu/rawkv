@@ -1,7 +1,11 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/chuyangliu/rawkv/lib"
+)
 
 func main() {
-	fmt.Println("RawKV")
+	fmt.Println(lib.Reverse("VKwaR"))
 }
