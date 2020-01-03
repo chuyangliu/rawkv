@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	godsTreeMap "github.com/emirpasic/gods/maps/treemap"
+	godsUtils "github.com/emirpasic/gods/utils"
 )
 
 // TreeMap maintains map keys in sorted order using a balanced tree
@@ -12,9 +13,12 @@ type TreeMap struct {
 	tree *godsTreeMap.Map
 }
 
-// New instantiates a tree map with keys of type string
-func New() *TreeMap {
-	return &TreeMap{tree: godsTreeMap.NewWithStringComparator()}
+// Cmp stores comparator function for keys, returns -1 if k1 < k2, 1 if k1 > k2, 0 if k1 == k2
+type Cmp func(k1, k2 interface{}) int
+
+// New instantiates a tree map with a comparator for keys
+func New(cmp Cmp) *TreeMap {
+	return &TreeMap{tree: godsTreeMap.NewWith(godsUtils.Comparator(cmp))}
 }
 
 // String returns a string representation of the map

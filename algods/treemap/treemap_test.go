@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chuyangliu/rawkv/store"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestBasic(t *testing.T) {
 	data := []struct {
-		key string
+		key store.Key
 		val interface{}
 	}{
 		{"a", "100"},
@@ -29,7 +30,7 @@ func TestBasic(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
 	rand.Shuffle(len(data), func(i, j int) { data[i], data[j] = data[j], data[i] })
 
-	tm := New()
+	tm := New(store.KeyCmp)
 	for _, entry := range data {
 		tm.Put(entry.key, entry.val)
 	}
@@ -39,10 +40,16 @@ func TestBasic(t *testing.T) {
 	for i, rawKey := range tm.Keys() {
 		rawVal, _ := tm.Get(rawKey)
 
-		if !assert.Equal(t, rawKey, data[i].key) {
+		if !assert.Equal(t, data[i].key, rawKey) {
 			panic(nil)
 		}
-		if !assert.Equal(t, rawVal, data[i].val) {
+		if !assert.Equal(t, data[i].val, rawVal) {
+			panic(nil)
+		}
+	}
+
+	for i, rawVal := range tm.Values() {
+		if !assert.Equal(t, data[i].val, rawVal) {
 			panic(nil)
 		}
 	}
