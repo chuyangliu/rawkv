@@ -19,9 +19,10 @@ type memStoreVal struct {
 	stat store.KStat
 }
 
-func newMemStore() *MemStore {
+// NewStore instantiates an empty MemStore
+func NewStore() *MemStore {
 	return &MemStore{
-		data: treemap.New(store.KeyCmp),
+		data: treemap.NewMap(store.KeyCmp),
 		size: 0,
 	}
 }

@@ -16,8 +16,8 @@ type TreeMap struct {
 // Cmp stores comparator function for keys, returns -1 if k1 < k2, 1 if k1 > k2, 0 if k1 == k2
 type Cmp func(k1, k2 interface{}) int
 
-// New instantiates a tree map with a comparator for keys
-func New(cmp Cmp) *TreeMap {
+// NewMap instantiates a tree map with a comparator for keys
+func NewMap(cmp Cmp) *TreeMap {
 	return &TreeMap{tree: godsTreeMap.NewWith(godsUtils.Comparator(cmp))}
 }
 

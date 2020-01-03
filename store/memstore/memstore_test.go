@@ -19,7 +19,7 @@ func TestBasic(t *testing.T) {
 	const max = 1000
 	const metaSize = (store.KVLenSize*2 + store.KStatSize) * max
 
-	ms := newMemStore()
+	ms := NewStore()
 	kvSize := 0
 
 	// put
@@ -70,7 +70,7 @@ func TestConcurrency(t *testing.T) {
 	const numWorkers = max / step
 	const metaSize = (store.KVLenSize*2 + store.KStatSize) * max
 
-	ms := newMemStore()
+	ms := NewStore()
 
 	// put
 	kvSizes := make(chan int, numWorkers)

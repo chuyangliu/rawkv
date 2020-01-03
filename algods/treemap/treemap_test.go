@@ -30,7 +30,7 @@ func TestBasic(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
 	rand.Shuffle(len(data), func(i, j int) { data[i], data[j] = data[j], data[i] })
 
-	tm := New(store.KeyCmp)
+	tm := NewMap(store.KeyCmp)
 	for _, entry := range data {
 		tm.Put(entry.key, entry.val)
 	}
