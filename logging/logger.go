@@ -6,34 +6,34 @@ import (
 	"os"
 )
 
-// Logger formats and writes log messages
+// Logger formats and writes log messages.
 type Logger struct {
 	logger *log.Logger
 }
 
-// New instantiates a Logger
+// New instantiates a Logger.
 func New() *Logger {
 	return &Logger{
 		logger: log.New(os.Stderr, "", log.LstdFlags|log.LUTC|log.Lshortfile),
 	}
 }
 
-// Debug writes formatted log with debug messages
+// Debug writes formatted log with debug messages.
 func (l *Logger) Debug(format string, operands ...interface{}) {
 	l.write("DEBUG", format, operands...)
 }
 
-// Info writes formatted log with information messages
+// Info writes formatted log with information messages.
 func (l *Logger) Info(format string, operands ...interface{}) {
 	l.write("INFO", format, operands...)
 }
 
-// Warn writes formatted log with warning messages
+// Warn writes formatted log with warning messages.
 func (l *Logger) Warn(format string, operands ...interface{}) {
 	l.write("WARN", format, operands...)
 }
 
-// Error writes formatted log with error messages
+// Error writes formatted log with error messages.
 func (l *Logger) Error(format string, operands ...interface{}) {
 	l.write("ERROR", format, operands...)
 }
