@@ -19,7 +19,7 @@ func TestBasic(t *testing.T) {
 	const max = 1000
 	const metaSize = (store.KVLenSize*2 + store.KStatSize) * max
 
-	ms := NewStore()
+	ms := New()
 	kvSize := 0
 
 	// put
@@ -45,6 +45,19 @@ func TestBasic(t *testing.T) {
 		}
 	}
 
+	// get all
+	for i, entry := range ms.Entries() {
+		if !assert.Equal(t, store.Key(i), entry.key) {
+			panic(nil)
+		}
+		if !assert.Equal(t, store.Value(i), entry.val) {
+			panic(nil)
+		}
+		if !assert.Equal(t, store.KStatPut, entry.stat) {
+			panic(nil)
+		}
+	}
+
 	// del
 	for i := 0; i < max; i++ {
 		ms.del(store.Key(i))
@@ -63,6 +76,19 @@ func TestBasic(t *testing.T) {
 			panic(nil)
 		}
 	}
+
+	// get all
+	for i, entry := range ms.Entries() {
+		if !assert.Equal(t, store.Key(i), entry.key) {
+			panic(nil)
+		}
+		if !assert.Equal(t, store.Value(""), entry.val) {
+			panic(nil)
+		}
+		if !assert.Equal(t, store.KStatDel, entry.stat) {
+			panic(nil)
+		}
+	}
 }
 
 func TestConcurrency(t *testing.T) {
@@ -70,7 +96,7 @@ func TestConcurrency(t *testing.T) {
 	const numWorkers = max / step
 	const metaSize = (store.KVLenSize*2 + store.KStatSize) * max
 
-	ms := NewStore()
+	ms := New()
 
 	// put
 	kvSizes := make(chan int, numWorkers)
@@ -98,6 +124,19 @@ func TestConcurrency(t *testing.T) {
 		}
 	}
 
+	// get all
+	for i, entry := range ms.Entries() {
+		if !assert.Equal(t, store.Key(i), entry.key) {
+			panic(nil)
+		}
+		if !assert.Equal(t, store.Value(i), entry.val) {
+			panic(nil)
+		}
+		if !assert.Equal(t, store.KStatPut, entry.stat) {
+			panic(nil)
+		}
+	}
+
 	// del
 	finishes := make(chan bool, numWorkers)
 	for i := 0; i < max; i += step {
@@ -119,6 +158,19 @@ func TestConcurrency(t *testing.T) {
 	for i := 0; i < max; i++ {
 		if entry := <-entries; !assert.False(t, entry.exist) {
 			panic(fmt.Sprintf("key %v not deleted", entry.key))
+		}
+	}
+
+	// get all
+	for i, entry := range ms.Entries() {
+		if !assert.Equal(t, store.Key(i), entry.key) {
+			panic(nil)
+		}
+		if !assert.Equal(t, store.Value(""), entry.val) {
+			panic(nil)
+		}
+		if !assert.Equal(t, store.KStatDel, entry.stat) {
+			panic(nil)
 		}
 	}
 }

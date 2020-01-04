@@ -7,24 +7,30 @@ import (
 	"github.com/chuyangliu/rawkv/store"
 )
 
-// MemStore stores key-value data in memory
+// MemStore stores key-value data in memory.
 type MemStore struct {
-	data *treemap.TreeMap // map key to memStoreVal
+	data *treemap.TreeMap // map key to MemStoreEntry
 	size store.KVLen      // number of bytes occupied by data
 	lock sync.RWMutex
 }
 
-type memStoreVal struct {
-	val  store.Value
-	stat store.KStat
-}
-
-// NewStore instantiates an empty MemStore
-func NewStore() *MemStore {
+// New instantiates an empty MemStore.
+func New() *MemStore {
 	return &MemStore{
-		data: treemap.NewMap(store.KeyCmp),
+		data: treemap.New(store.KeyCmp),
 		size: 0,
 	}
+}
+
+// Entries returns all stored entries sorted by entry.key.
+// Note that access to returned *Entry is unprotected.
+func (ms *MemStore) Entries() []*Entry {
+	raws := ms.data.Values()
+	entries := make([]*Entry, len(raws))
+	for i := 0; i < len(raws); i++ {
+		entries[i], _ = raws[i].(*Entry)
+	}
+	return entries
 }
 
 func (ms *MemStore) getSize() store.KVLen {
@@ -36,42 +42,39 @@ func (ms *MemStore) getSize() store.KVLen {
 func (ms *MemStore) put(key store.Key, val store.Value) {
 	ms.lock.Lock()
 	defer ms.lock.Unlock()
-	ms.data.Put(key, &memStoreVal{
+	entry := &Entry{
+		key:  key,
 		val:  val,
 		stat: store.KStatPut,
-	})
-	ms.size += entrySize(key, val)
+	}
+	ms.data.Put(key, entry)
+	ms.size += entry.size()
 }
 
 func (ms *MemStore) get(key store.Key) (store.Value, bool) {
 	ms.lock.RLock()
 	defer ms.lock.RUnlock()
-	return ms.getUnsafe(key)
+	if entry, found := ms.getEntry(key); found && entry.stat == store.KStatPut {
+		return entry.val, true
+	}
+	return "", false
 }
 
 func (ms *MemStore) del(key store.Key) {
 	ms.lock.Lock()
 	defer ms.lock.Unlock()
-	if val, found := ms.getUnsafe(key); found { // update only if key exists
-		ms.size -= entrySize(key, val)
-		ms.data.Put(key, &memStoreVal{
-			val:  "",
-			stat: store.KStatDel,
-		})
-		ms.size += entrySize(key, "")
+	if entry, found := ms.getEntry(key); found { // update only if entry exists
+		ms.size -= entry.size()
+		entry.val = ""
+		entry.stat = store.KStatDel
+		ms.size += entry.size()
 	}
 }
 
-func (ms *MemStore) getUnsafe(key store.Key) (store.Value, bool) {
-	if rawVal, found := ms.data.Get(key); found {
-		msVal, _ := rawVal.(*memStoreVal)
-		if msVal.stat == store.KStatPut {
-			return msVal.val, true
-		}
+func (ms *MemStore) getEntry(key store.Key) (*Entry, bool) {
+	if rawEntry, found := ms.data.Get(key); found {
+		entry, _ := rawEntry.(*Entry)
+		return entry, true
 	}
-	return "", false
-}
-
-func entrySize(key store.Key, val store.Value) store.KVLen {
-	return store.KVLen(store.KVLenSize + len(key) + store.KVLenSize + len(val) + store.KStatSize)
+	return nil, false
 }
