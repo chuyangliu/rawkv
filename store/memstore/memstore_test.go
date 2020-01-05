@@ -29,7 +29,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	// size
-	if !assert.Equal(t, metaSize+kvSize*2, ms.getSize()) {
+	if !assert.Equal(t, metaSize+kvSize*2, ms.Size()) {
 		panic(nil)
 	}
 
@@ -47,13 +47,13 @@ func TestBasic(t *testing.T) {
 
 	// get all
 	for i, entry := range ms.Entries() {
-		if !assert.Equal(t, store.Key(i), entry.key) {
+		if !assert.Equal(t, store.Key(i), entry.Key) {
 			panic(nil)
 		}
-		if !assert.Equal(t, store.Value(i), entry.val) {
+		if !assert.Equal(t, store.Value(i), entry.Val) {
 			panic(nil)
 		}
-		if !assert.Equal(t, store.KStatPut, entry.stat) {
+		if !assert.Equal(t, store.KStatPut, entry.Stat) {
 			panic(nil)
 		}
 	}
@@ -64,7 +64,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	// size
-	if !assert.Equal(t, metaSize+kvSize, ms.getSize()) {
+	if !assert.Equal(t, metaSize+kvSize, ms.Size()) {
 		panic(nil)
 	}
 
@@ -79,13 +79,13 @@ func TestBasic(t *testing.T) {
 
 	// get all
 	for i, entry := range ms.Entries() {
-		if !assert.Equal(t, store.Key(i), entry.key) {
+		if !assert.Equal(t, store.Key(i), entry.Key) {
 			panic(nil)
 		}
-		if !assert.Equal(t, store.Value(""), entry.val) {
+		if !assert.Equal(t, store.Value(""), entry.Val) {
 			panic(nil)
 		}
-		if !assert.Equal(t, store.KStatDel, entry.stat) {
+		if !assert.Equal(t, store.KStatDel, entry.Stat) {
 			panic(nil)
 		}
 	}
@@ -109,7 +109,7 @@ func TestConcurrency(t *testing.T) {
 	for i := 0; i < numWorkers; i++ {
 		kvSize += <-kvSizes
 	}
-	if !assert.Equal(t, metaSize+kvSize*2, ms.getSize()) {
+	if !assert.Equal(t, metaSize+kvSize*2, ms.Size()) {
 		panic(nil)
 	}
 
@@ -126,13 +126,13 @@ func TestConcurrency(t *testing.T) {
 
 	// get all
 	for i, entry := range ms.Entries() {
-		if !assert.Equal(t, store.Key(i), entry.key) {
+		if !assert.Equal(t, store.Key(i), entry.Key) {
 			panic(nil)
 		}
-		if !assert.Equal(t, store.Value(i), entry.val) {
+		if !assert.Equal(t, store.Value(i), entry.Val) {
 			panic(nil)
 		}
-		if !assert.Equal(t, store.KStatPut, entry.stat) {
+		if !assert.Equal(t, store.KStatPut, entry.Stat) {
 			panic(nil)
 		}
 	}
@@ -147,7 +147,7 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// size
-	if !assert.Equal(t, metaSize+kvSize, ms.getSize()) {
+	if !assert.Equal(t, metaSize+kvSize, ms.Size()) {
 		panic(nil)
 	}
 
@@ -163,13 +163,13 @@ func TestConcurrency(t *testing.T) {
 
 	// get all
 	for i, entry := range ms.Entries() {
-		if !assert.Equal(t, store.Key(i), entry.key) {
+		if !assert.Equal(t, store.Key(i), entry.Key) {
 			panic(nil)
 		}
-		if !assert.Equal(t, store.Value(""), entry.val) {
+		if !assert.Equal(t, store.Value(""), entry.Val) {
 			panic(nil)
 		}
-		if !assert.Equal(t, store.KStatDel, entry.stat) {
+		if !assert.Equal(t, store.KStatDel, entry.Stat) {
 			panic(nil)
 		}
 	}

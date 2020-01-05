@@ -23,17 +23,18 @@ func New() *MemStore {
 }
 
 // Entries returns all stored entries sorted by entry.key.
-// Note that access to returned *Entry is unprotected.
-func (ms *MemStore) Entries() []*Entry {
+// Note that access to returned *store.Entry is unprotected.
+func (ms *MemStore) Entries() []*store.Entry {
 	raws := ms.data.Values()
-	entries := make([]*Entry, len(raws))
+	entries := make([]*store.Entry, len(raws))
 	for i := 0; i < len(raws); i++ {
-		entries[i], _ = raws[i].(*Entry)
+		entries[i], _ = raws[i].(*store.Entry)
 	}
 	return entries
 }
 
-func (ms *MemStore) getSize() store.KVLen {
+// Size returns number of bytes needed to persist data on disk.
+func (ms *MemStore) Size() store.KVLen {
 	ms.lock.RLock()
 	defer ms.lock.RUnlock()
 	return ms.size
@@ -42,20 +43,20 @@ func (ms *MemStore) getSize() store.KVLen {
 func (ms *MemStore) put(key store.Key, val store.Value) {
 	ms.lock.Lock()
 	defer ms.lock.Unlock()
-	entry := &Entry{
-		key:  key,
-		val:  val,
-		stat: store.KStatPut,
+	entry := &store.Entry{
+		Key:  key,
+		Val:  val,
+		Stat: store.KStatPut,
 	}
 	ms.data.Put(key, entry)
-	ms.size += entry.size()
+	ms.size += entry.Size()
 }
 
 func (ms *MemStore) get(key store.Key) (store.Value, bool) {
 	ms.lock.RLock()
 	defer ms.lock.RUnlock()
-	if entry, found := ms.getEntry(key); found && entry.stat == store.KStatPut {
-		return entry.val, true
+	if entry, found := ms.getEntry(key); found && entry.Stat == store.KStatPut {
+		return entry.Val, true
 	}
 	return "", false
 }
@@ -64,16 +65,16 @@ func (ms *MemStore) del(key store.Key) {
 	ms.lock.Lock()
 	defer ms.lock.Unlock()
 	if entry, found := ms.getEntry(key); found { // update only if entry exists
-		ms.size -= entry.size()
-		entry.val = ""
-		entry.stat = store.KStatDel
-		ms.size += entry.size()
+		ms.size -= entry.Size()
+		entry.Val = ""
+		entry.Stat = store.KStatDel
+		ms.size += entry.Size()
 	}
 }
 
-func (ms *MemStore) getEntry(key store.Key) (*Entry, bool) {
+func (ms *MemStore) getEntry(key store.Key) (*store.Entry, bool) {
 	if rawEntry, found := ms.data.Get(key); found {
-		entry, _ := rawEntry.(*Entry)
+		entry, _ := rawEntry.(*store.Entry)
 		return entry, true
 	}
 	return nil, false
