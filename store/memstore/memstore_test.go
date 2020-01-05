@@ -20,16 +20,16 @@ func TestBasic(t *testing.T) {
 	const metaSize = (store.KVLenSize*2 + store.KStatSize) * max
 
 	ms := New()
-	kvSize := 0
+	kvSize := store.KVLen(0)
 
 	// put
 	for i := 0; i < max; i++ {
 		ms.put(store.Key(i), store.Value(i))
-		kvSize += len(store.Key(i))
+		kvSize += store.KVLen(len(store.Key(i)))
 	}
 
 	// size
-	if !assert.Equal(t, store.KVLen(metaSize+kvSize*2), ms.getSize()) {
+	if !assert.Equal(t, metaSize+kvSize*2, ms.getSize()) {
 		panic(nil)
 	}
 
@@ -64,7 +64,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	// size
-	if !assert.Equal(t, store.KVLen(metaSize+kvSize), ms.getSize()) {
+	if !assert.Equal(t, metaSize+kvSize, ms.getSize()) {
 		panic(nil)
 	}
 
@@ -99,17 +99,17 @@ func TestConcurrency(t *testing.T) {
 	ms := New()
 
 	// put
-	kvSizes := make(chan int, numWorkers)
+	kvSizes := make(chan store.KVLen, numWorkers)
 	for i := 0; i < max; i += step {
 		go putData(ms, i, i+step, kvSizes)
 	}
 
 	// size
-	kvSize := 0
+	kvSize := store.KVLen(0)
 	for i := 0; i < numWorkers; i++ {
 		kvSize += <-kvSizes
 	}
-	if !assert.Equal(t, store.KVLen(metaSize+kvSize*2), ms.getSize()) {
+	if !assert.Equal(t, metaSize+kvSize*2, ms.getSize()) {
 		panic(nil)
 	}
 
@@ -147,7 +147,7 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// size
-	if !assert.Equal(t, store.KVLen(metaSize+kvSize), ms.getSize()) {
+	if !assert.Equal(t, metaSize+kvSize, ms.getSize()) {
 		panic(nil)
 	}
 
@@ -175,12 +175,12 @@ func TestConcurrency(t *testing.T) {
 	}
 }
 
-func putData(ms *MemStore, beg int, end int, kvSizes chan int) {
+func putData(ms *MemStore, beg int, end int, kvSizes chan store.KVLen) {
 	sleepRand()
-	kvSize := 0
+	kvSize := store.KVLen(0)
 	for i := beg; i < end; i++ {
 		ms.put(store.Key(i), store.Value(i))
-		kvSize += len(store.Key(i))
+		kvSize += store.KVLen(len(store.Key(i)))
 	}
 	kvSizes <- kvSize
 }

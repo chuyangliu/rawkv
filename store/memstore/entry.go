@@ -12,5 +12,5 @@ type Entry struct {
 }
 
 func (e *Entry) size() store.KVLen {
-	return store.KVLen(store.KVLenSize + len(e.key) + store.KVLenSize + len(e.val) + store.KStatSize)
+	return store.KVLenSize + store.KVLen(len(e.key)) + store.KVLenSize + store.KVLen(len(e.val)) + store.KStatSize
 }
