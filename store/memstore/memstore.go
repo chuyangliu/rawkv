@@ -40,7 +40,8 @@ func (ms *MemStore) Size() store.KVLen {
 	return ms.size
 }
 
-func (ms *MemStore) put(key store.Key, val store.Value) {
+// Put adds a key-value pair to the store.
+func (ms *MemStore) Put(key store.Key, val store.Value) {
 	ms.lock.Lock()
 	defer ms.lock.Unlock()
 	entry := &store.Entry{
@@ -52,7 +53,8 @@ func (ms *MemStore) put(key store.Key, val store.Value) {
 	ms.size += entry.Size()
 }
 
-func (ms *MemStore) get(key store.Key) (store.Value, bool) {
+// Get returns the value associated with the key, and whether the key exists.
+func (ms *MemStore) Get(key store.Key) (store.Value, bool) {
 	ms.lock.RLock()
 	defer ms.lock.RUnlock()
 	if entry, found := ms.getEntry(key); found && entry.Stat == store.KStatPut {
@@ -61,7 +63,8 @@ func (ms *MemStore) get(key store.Key) (store.Value, bool) {
 	return "", false
 }
 
-func (ms *MemStore) del(key store.Key) {
+// Del removes key from the store.
+func (ms *MemStore) Del(key store.Key) {
 	ms.lock.Lock()
 	defer ms.lock.Unlock()
 	if entry, found := ms.getEntry(key); found { // update only if entry exists

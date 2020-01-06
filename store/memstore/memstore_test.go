@@ -24,7 +24,7 @@ func TestBasic(t *testing.T) {
 
 	// put
 	for i := 0; i < max; i++ {
-		ms.put(store.Key(i), store.Value(i))
+		ms.Put(store.Key(i), store.Value(i))
 		kvSize += store.KVLen(len(store.Key(i)))
 	}
 
@@ -35,7 +35,7 @@ func TestBasic(t *testing.T) {
 
 	// get
 	for i := 0; i < max; i++ {
-		val, found := ms.get(store.Key(i))
+		val, found := ms.Get(store.Key(i))
 
 		if !assert.True(t, found) {
 			panic(nil)
@@ -60,7 +60,7 @@ func TestBasic(t *testing.T) {
 
 	// del
 	for i := 0; i < max; i++ {
-		ms.del(store.Key(i))
+		ms.Del(store.Key(i))
 	}
 
 	// size
@@ -70,7 +70,7 @@ func TestBasic(t *testing.T) {
 
 	// get
 	for i := 0; i < max; i++ {
-		_, found := ms.get(store.Key(i))
+		_, found := ms.Get(store.Key(i))
 
 		if !assert.False(t, found) {
 			panic(nil)
@@ -179,7 +179,7 @@ func putData(ms *MemStore, beg int, end int, kvSizes chan store.KVLen) {
 	sleepRand()
 	kvSize := store.KVLen(0)
 	for i := beg; i < end; i++ {
-		ms.put(store.Key(i), store.Value(i))
+		ms.Put(store.Key(i), store.Value(i))
 		kvSize += store.KVLen(len(store.Key(i)))
 	}
 	kvSizes <- kvSize
@@ -188,7 +188,7 @@ func putData(ms *MemStore, beg int, end int, kvSizes chan store.KVLen) {
 func delData(ms *MemStore, beg int, end int, finishes chan bool) {
 	sleepRand()
 	for i := beg; i < end; i++ {
-		ms.del(store.Key(i))
+		ms.Del(store.Key(i))
 	}
 	finishes <- true
 }
@@ -196,7 +196,7 @@ func delData(ms *MemStore, beg int, end int, finishes chan bool) {
 func checkDataExist(ms *MemStore, beg int, end int, entries chan concurrentGetEntry) {
 	sleepRand()
 	for i := beg; i < end; i++ {
-		val, found := ms.get(store.Key(i))
+		val, found := ms.Get(store.Key(i))
 		if !found || val != store.Value(i) {
 			entries <- concurrentGetEntry{key: i, exist: false}
 		} else {
