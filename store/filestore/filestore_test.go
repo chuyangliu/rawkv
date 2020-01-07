@@ -11,8 +11,8 @@ import (
 )
 
 func TestBasic(t *testing.T) {
-	max := 1
-	blkSize := store.KVLen(1 << 18)
+	max := 1000
+	blkSize := store.KVLen(4096)
 	path := "./filestore.test"
 
 	// create data
@@ -29,14 +29,52 @@ func TestBasic(t *testing.T) {
 	}
 
 	// create FileStore from MemStore
-	fsMem := NewFromMem(path, ms)
-	if err := fsMem.Flush(blkSize); !assert.NoError(t, err) {
+	fs := New(path, ms)
+
+	// get
+	for _, v := range data {
+		entryExpect := store.Entry{
+			Key:  store.Key(v),
+			Val:  store.Value(v),
+			Stat: store.KStatPut,
+		}
+		entry, err := fs.Get(entryExpect.Key)
+		if !assert.NoError(t, err) || !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
+			panic(nil)
+		}
+	}
+
+	// flush MemStore
+	if err := fs.Flush(blkSize); !assert.NoError(t, err) {
 		panic(nil)
 	}
 
-	// create FileStore from flushed store file
-	_, err := NewFromFile(path)
-	if !assert.NoError(t, err) {
-		panic(nil)
+	// get
+	for _, v := range data {
+		entryExpect := store.Entry{
+			Key:  store.Key(v),
+			Val:  store.Value(v),
+			Stat: store.KStatPut,
+		}
+		entry, err := fs.Get(entryExpect.Key)
+		if !assert.NoError(t, err) || !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
+			panic(nil)
+		}
+	}
+
+	// create FileStore from disk
+	fs = New(path, nil)
+
+	// get
+	for _, v := range data {
+		entryExpect := store.Entry{
+			Key:  store.Key(v),
+			Val:  store.Value(v),
+			Stat: store.KStatPut,
+		}
+		entry, err := fs.Get(entryExpect.Key)
+		if !assert.NoError(t, err) || !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
+			panic(nil)
+		}
 	}
 }

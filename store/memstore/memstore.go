@@ -54,20 +54,17 @@ func (ms *MemStore) Put(key store.Key, val store.Value) {
 }
 
 // Get returns the value associated with the key, and whether the key exists.
-func (ms *MemStore) Get(key store.Key) (store.Value, bool) {
+func (ms *MemStore) Get(key store.Key) *store.Entry {
 	ms.lock.RLock()
 	defer ms.lock.RUnlock()
-	if entry, found := ms.getEntry(key); found && entry.Stat == store.KStatPut {
-		return entry.Val, true
-	}
-	return "", false
+	return ms.getUnsafe(key)
 }
 
 // Del removes key from the store.
 func (ms *MemStore) Del(key store.Key) {
 	ms.lock.Lock()
 	defer ms.lock.Unlock()
-	if entry, found := ms.getEntry(key); found { // update only if entry exists
+	if entry := ms.getUnsafe(key); entry != nil { // update only if entry exists
 		ms.size -= entry.Size()
 		entry.Val = ""
 		entry.Stat = store.KStatDel
@@ -75,10 +72,10 @@ func (ms *MemStore) Del(key store.Key) {
 	}
 }
 
-func (ms *MemStore) getEntry(key store.Key) (*store.Entry, bool) {
+func (ms *MemStore) getUnsafe(key store.Key) *store.Entry {
 	if rawEntry, found := ms.data.Get(key); found {
 		entry, _ := rawEntry.(*store.Entry)
-		return entry, true
+		return entry
 	}
-	return nil, false
+	return nil // key not exist
 }

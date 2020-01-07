@@ -2,7 +2,9 @@ package filestore
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/chuyangliu/rawkv/store"
@@ -12,12 +14,14 @@ import (
 // FileStore persists key-value data as an immutable file on disk.
 type FileStore struct {
 	path     string             // path to store file
-	memStore *memstore.MemStore // read only, reset to nil after flushed
+	memStore *memstore.MemStore // read-only, reset to nil after flushed
 	blkIdx   *blockIndex        // in-memory index to locate blocks in store file
 }
 
-// NewFromMem instantiates a FileStore from MemStore.
-func NewFromMem(path string, ms *memstore.MemStore) *FileStore {
+// New instantiates a FileStore.
+// If ms is nil, the FileStore is backed by store file on disk.
+// Otherwise, ms will be used to back FileStore and can be flushed to store file.
+func New(path string, ms *memstore.MemStore) *FileStore {
 	return &FileStore{
 		path:     path,
 		memStore: ms,
@@ -25,20 +29,7 @@ func NewFromMem(path string, ms *memstore.MemStore) *FileStore {
 	}
 }
 
-// NewFromFile instantiates a FileStore from store file.
-func NewFromFile(path string) (*FileStore, error) {
-	fs := &FileStore{
-		path:     path,
-		memStore: nil,
-		blkIdx:   nil,
-	}
-	if err := fs.readBlockIndex(); err != nil {
-		return nil, fmt.Errorf("Read block index failed | path=%v | err=[%w]", path, err)
-	}
-	return fs, nil
-}
-
-// Flush persists MemStore to store file.
+// Flush persists MemStore to store file. Require MemStore not nil.
 func (fs *FileStore) Flush(blkSize store.KVLen) error {
 	file, err := os.OpenFile(fs.path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0666)
 	if err != nil {
@@ -72,7 +63,7 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 			sizeCur = 0
 		}
 
-		if err := fs.writeKVEntry(writer, entry); err != nil {
+		if err := writeKVEntry(writer, entry); err != nil {
 			return fmt.Errorf("Write kv entry failed | path=%v | entry=%v | err=[%w]", fs.path, *entry, err)
 		}
 
@@ -87,13 +78,13 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 
 	// persist block index
 	for _, entry := range fs.blkIdx.entries() {
-		if err := fs.writeBlockIndexEntry(writer, entry); err != nil {
+		if err := writeBlockIndexEntry(writer, entry); err != nil {
 			return fmt.Errorf("Write block index entry failed | path=%v | entry=%v | err=[%w]", fs.path, *entry, err)
 		}
 	}
 
 	// persist block index length
-	if err := fs.writeKVLen(writer, sizeIdx); err != nil {
+	if err := writeKVLen(writer, sizeIdx); err != nil {
 		return fmt.Errorf("Write block index length failed | path=%v | sizeIdx=%v | err=[%w]", fs.path, sizeIdx, err)
 	}
 
@@ -105,52 +96,122 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 	return nil
 }
 
-func (fs *FileStore) readBlockIndex() error {
-	file, err := os.Open(fs.path)
+// Get returns the entry associated with the key, or nil if not exist.
+func (fs *FileStore) Get(key store.Key) (*store.Entry, error) {
+	if fs.memStore != nil {
+		entry := fs.memStore.Get(key)
+		return entry, nil
+	}
+
+	if fs.blkIdx == nil {
+		blkIdx, err := readBlockIndex(fs.path)
+		if err != nil {
+			return nil, fmt.Errorf("Read block index failed | path=%v | err=[%w]", fs.path, err)
+		}
+		fs.blkIdx = blkIdx
+	}
+
+	idxEntry := fs.blkIdx.get(key)
+	if idxEntry == nil { // not exist
+		return nil, nil
+	}
+
+	blk, err := readBlock(fs.path, idxEntry)
 	if err != nil {
-		return fmt.Errorf("Open file failed | path=%v | err=[%w]", fs.path, err)
+		return nil, fmt.Errorf("Read block failed | path=%v | err=[%w]", fs.path, err)
+	}
+
+	entry := blk.get(key)
+	return entry, nil
+}
+
+func readBlockIndex(path string) (*blockIndex, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("Open file failed | path=%v | err=[%w]", path, err)
 	}
 	defer file.Close()
 
-	reader := bufio.NewReader(file)
-
 	// seek index length
 	if _, err := file.Seek(-int64(store.KVLenSize), os.SEEK_END); err != nil {
-		return fmt.Errorf("Seek index length failed | path=%v | err=[%w]", fs.path, err)
+		return nil, fmt.Errorf("Seek index length failed | path=%v | err=[%w]", path, err)
 	}
 
 	// read index length
-	idxLen, err := fs.readKVLen(reader)
+	idxLen, err := readKVLen(file)
 	if err != nil {
-		return fmt.Errorf("Read index length failed | path=%v | err=[%w]", fs.path, err)
+		return nil, fmt.Errorf("Read index length failed | path=%v | err=[%w]", path, err)
 	}
 
 	// seek index entry
 	if _, err := file.Seek(-int64(store.KVLenSize+idxLen), os.SEEK_END); err != nil {
-		return fmt.Errorf("Seek index entry failed | path=%v | idxLen=%v | err=[%w]", fs.path, idxLen, err)
+		return nil, fmt.Errorf("Seek index entry failed | path=%v | idxLen=%v | err=[%w]", path, idxLen, err)
 	}
 
-	fs.blkIdx = newBlockIndex()
+	// read index bytes
+	raw := make([]byte, idxLen)
+	if _, err := io.ReadFull(file, raw); err != nil {
+		return nil, fmt.Errorf("Read index bytes failed | path=%v | idxLen=%v | err=[%w]", path, idxLen, err)
+	}
+
+	reader := bytes.NewReader(raw)
+	blkIdx := newBlockIndex()
 	size := store.KVLen(0)
 
 	// read index entries
 	for size < idxLen {
-		entry, err := fs.readBlockIndexEntry(reader)
+		entry, err := readBlockIndexEntry(reader)
 		if err != nil {
-			return fmt.Errorf("Read entry failed | path=%v | size=%v | idxLen=%v | err=[%w]",
-				fs.path, size, idxLen, err)
+			return nil, fmt.Errorf("Read index entry failed | path=%v | size=%v | idxLen=%v | err=[%w]",
+				path, size, idxLen, err)
 		}
-		fs.blkIdx.add(entry)
+		blkIdx.add(entry)
 		size += entry.size()
 	}
 
-	return nil
+	return blkIdx, nil
 }
 
-func (fs *FileStore) writeKVEntry(writer *bufio.Writer, entry *store.Entry) error {
+func readBlock(path string, idxEntry *blockIndexEntry) (*fileBlock, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("Open file failed | path=%v | err=[%w]", path, err)
+	}
+	defer file.Close()
+
+	// seek block start
+	if _, err := file.Seek(int64(idxEntry.off), os.SEEK_SET); err != nil {
+		return nil, fmt.Errorf("Seek block start failed | path=%v | err=[%w]", path, err)
+	}
+
+	// read block bytes
+	raw := make([]byte, idxEntry.len)
+	if _, err := io.ReadFull(file, raw); err != nil {
+		return nil, fmt.Errorf("Read block bytes failed | path=%v | err=[%w]", path, err)
+	}
+
+	reader := bytes.NewReader(raw)
+	blk := newBlock()
+	size := store.KVLen(0)
+
+	// read kv entries
+	for size < idxEntry.len {
+		entry, err := readKVEntry(reader)
+		if err != nil {
+			return nil, fmt.Errorf("Read kv entry failed | path=%v | size=%v | blkLen=%v | err=[%w]",
+				path, size, idxEntry.len, err)
+		}
+		blk.add(entry)
+		size += entry.Size()
+	}
+
+	return blk, nil
+}
+
+func writeKVEntry(writer *bufio.Writer, entry *store.Entry) error {
 
 	keyLen := store.KVLen(len(entry.Key))
-	if err := fs.writeKVLen(writer, keyLen); err != nil {
+	if err := writeKVLen(writer, keyLen); err != nil {
 		return fmt.Errorf("Write key length failed | keyLen=%v | err=[%w]", keyLen, err)
 	}
 
@@ -159,7 +220,7 @@ func (fs *FileStore) writeKVEntry(writer *bufio.Writer, entry *store.Entry) erro
 	}
 
 	valLen := store.KVLen(len(entry.Val))
-	if err := fs.writeKVLen(writer, valLen); err != nil {
+	if err := writeKVLen(writer, valLen); err != nil {
 		return fmt.Errorf("Write value length failed | valLen=%v | err=[%w]", valLen, err)
 	}
 
@@ -167,7 +228,7 @@ func (fs *FileStore) writeKVEntry(writer *bufio.Writer, entry *store.Entry) erro
 		return fmt.Errorf("Write value failed | val=%v | err=[%w]", entry.Val, err)
 	}
 
-	if err := fs.writeKStat(writer, entry.Stat); err != nil {
+	if err := writeKStat(writer, entry.Stat); err != nil {
 		return fmt.Errorf("Write status failed | stat=%v | err=[%w]", entry.Stat, err)
 
 	}
@@ -175,10 +236,44 @@ func (fs *FileStore) writeKVEntry(writer *bufio.Writer, entry *store.Entry) erro
 	return nil
 }
 
-func (fs *FileStore) writeBlockIndexEntry(writer *bufio.Writer, entry *blockIndexEntry) error {
+func readKVEntry(reader io.Reader) (*store.Entry, error) {
+
+	keyLen, err := readKVLen(reader)
+	if err != nil {
+		return nil, fmt.Errorf("Read key length failed | err=[%w]", err)
+	}
+
+	key, err := readKey(reader, keyLen)
+	if err != nil {
+		return nil, fmt.Errorf("Read key failed | err=[%w]", err)
+	}
+
+	valLen, err := readKVLen(reader)
+	if err != nil {
+		return nil, fmt.Errorf("Read value length failed | err=[%w]", err)
+	}
+
+	val, err := readValue(reader, valLen)
+	if err != nil {
+		return nil, fmt.Errorf("Read value failed | err=[%w]", err)
+	}
+
+	stat, err := readKStat(reader)
+	if err != nil {
+		return nil, fmt.Errorf("Read status failed | err=[%w]", err)
+	}
+
+	return &store.Entry{
+		Key:  key,
+		Val:  val,
+		Stat: stat,
+	}, nil
+}
+
+func writeBlockIndexEntry(writer *bufio.Writer, entry *blockIndexEntry) error {
 
 	keyLen := store.KVLen(len(entry.key))
-	if err := fs.writeKVLen(writer, keyLen); err != nil {
+	if err := writeKVLen(writer, keyLen); err != nil {
 		return fmt.Errorf("Write key length failed | keyLen=%v | err=[%w]", keyLen, err)
 	}
 
@@ -186,35 +281,35 @@ func (fs *FileStore) writeBlockIndexEntry(writer *bufio.Writer, entry *blockInde
 		return fmt.Errorf("Write key failed | key=%v | err=[%w]", entry.key, err)
 	}
 
-	if err := fs.writeKVLen(writer, entry.off); err != nil {
+	if err := writeKVLen(writer, entry.off); err != nil {
 		return fmt.Errorf("Write offset failed | off=%v | err=[%w]", entry.off, err)
 	}
 
-	if err := fs.writeKVLen(writer, entry.len); err != nil {
+	if err := writeKVLen(writer, entry.len); err != nil {
 		return fmt.Errorf("Write length failed | len=%v | err=[%w]", entry.len, err)
 	}
 
 	return nil
 }
 
-func (fs *FileStore) readBlockIndexEntry(reader *bufio.Reader) (*blockIndexEntry, error) {
+func readBlockIndexEntry(reader io.Reader) (*blockIndexEntry, error) {
 
-	keyLen, err := fs.readKVLen(reader)
+	keyLen, err := readKVLen(reader)
 	if err != nil {
 		return nil, fmt.Errorf("Read key length failed | err=[%w]", err)
 	}
 
-	key, err := fs.readKey(reader, keyLen)
+	key, err := readKey(reader, keyLen)
 	if err != nil {
 		return nil, fmt.Errorf("Read key failed | keyLen=%v | err=[%w]", keyLen, err)
 	}
 
-	off, err := fs.readKVLen(reader)
+	off, err := readKVLen(reader)
 	if err != nil {
 		return nil, fmt.Errorf("Read offset failed | err=[%w]", err)
 	}
 
-	len, err := fs.readKVLen(reader)
+	len, err := readKVLen(reader)
 	if err != nil {
 		return nil, fmt.Errorf("Read length failed | err=[%w]", err)
 	}
@@ -226,7 +321,42 @@ func (fs *FileStore) readBlockIndexEntry(reader *bufio.Reader) (*blockIndexEntry
 	}, nil
 }
 
-func (fs *FileStore) writeKVLen(writer *bufio.Writer, val store.KVLen) error {
+func readKey(reader io.Reader, keyLen store.KVLen) (store.Key, error) {
+	raw := make([]byte, keyLen)
+	if _, err := io.ReadFull(reader, raw); err != nil {
+		return "", fmt.Errorf("Read full failed | err=[%w]", err)
+	}
+	return store.Key(raw), nil
+}
+
+func readValue(reader io.Reader, valLen store.KVLen) (store.Value, error) {
+	raw := make([]byte, valLen)
+	if _, err := io.ReadFull(reader, raw); err != nil {
+		return "", fmt.Errorf("Read full failed | err=[%w]", err)
+	}
+	return store.Value(raw), nil
+}
+
+func writeKStat(writer *bufio.Writer, val store.KStat) error {
+	if err := writer.WriteByte(byte(val)); err != nil {
+		return fmt.Errorf("Write byte failed | val=%v | err=[%w]", val, err)
+	}
+	return nil
+}
+
+func readKStat(reader io.Reader) (store.KStat, error) {
+	raw := make([]byte, store.KStatSize)
+	if _, err := io.ReadFull(reader, raw); err != nil {
+		return 0, fmt.Errorf("Read full failed | err=[%w]", err)
+	}
+	val := store.KStat(0)
+	for i, b := range raw {
+		val |= store.KStat(b) << (8 * i)
+	}
+	return val, nil
+}
+
+func writeKVLen(writer *bufio.Writer, val store.KVLen) error {
 	for i := store.KVLen(0); i < store.KVLenSize; i++ {
 		if err := writer.WriteByte(byte(val & 0xFF)); err != nil {
 			return fmt.Errorf("Write byte failed | val=%v | err=[%w]", val, err)
@@ -236,33 +366,14 @@ func (fs *FileStore) writeKVLen(writer *bufio.Writer, val store.KVLen) error {
 	return nil
 }
 
-func (fs *FileStore) readKVLen(reader *bufio.Reader) (store.KVLen, error) {
+func readKVLen(reader io.Reader) (store.KVLen, error) {
+	raw := make([]byte, store.KVLenSize)
+	if _, err := io.ReadFull(reader, raw); err != nil {
+		return 0, fmt.Errorf("Read full failed | err=[%w]", err)
+	}
 	val := store.KVLen(0)
-	for i := store.KVLen(0); i < store.KVLenSize; i++ {
-		b, err := reader.ReadByte()
-		if err != nil {
-			return 0, fmt.Errorf("Read byte failed | val=%v | err=[%w]", val, err)
-		}
+	for i, b := range raw {
 		val |= store.KVLen(b) << (8 * i)
 	}
 	return val, nil
-}
-
-func (fs *FileStore) writeKStat(writer *bufio.Writer, val store.KStat) error {
-	if err := writer.WriteByte(byte(val)); err != nil {
-		return fmt.Errorf("Write byte failed | val=%v | err=[%w]", val, err)
-	}
-	return nil
-}
-
-func (fs *FileStore) readKey(reader *bufio.Reader, keyLen store.KVLen) (store.Key, error) {
-	raw := make([]byte, keyLen)
-	for i := store.KVLen(0); i < keyLen; i++ {
-		b, err := reader.ReadByte()
-		if err != nil {
-			return "", fmt.Errorf("Read byte failed | err=[%w]", err)
-		}
-		raw[i] = b
-	}
-	return store.Key(raw), nil
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type concurrentGetEntry struct {
+type checkExistResult struct {
 	key   store.Key
 	exist bool
 }
@@ -44,25 +44,25 @@ func TestBasic(t *testing.T) {
 
 	// get
 	for _, v := range data {
-		val, found := ms.Get(store.Key(v))
-
-		if !assert.True(t, found) {
-			panic(nil)
+		entryExpect := store.Entry{
+			Key:  store.Key(v),
+			Val:  store.Value(v),
+			Stat: store.KStatPut,
 		}
-		if !assert.Equal(t, store.Value(v), val) {
+		entry := ms.Get(entryExpect.Key)
+		if !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
 		}
 	}
 
 	// get all
 	for i, entry := range ms.Entries() {
-		if !assert.Equal(t, store.Key(data[i]), entry.Key) {
-			panic(nil)
+		entryExpect := store.Entry{
+			Key:  store.Key(data[i]),
+			Val:  store.Value(data[i]),
+			Stat: store.KStatPut,
 		}
-		if !assert.Equal(t, store.Value(data[i]), entry.Val) {
-			panic(nil)
-		}
-		if !assert.Equal(t, store.KStatPut, entry.Stat) {
+		if !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
 		}
 	}
@@ -70,6 +70,7 @@ func TestBasic(t *testing.T) {
 	// del
 	for _, v := range data {
 		ms.Del(store.Key(v))
+
 	}
 
 	// size
@@ -79,22 +80,25 @@ func TestBasic(t *testing.T) {
 
 	// get
 	for _, v := range data {
-		_, found := ms.Get(store.Key(v))
-
-		if !assert.False(t, found) {
+		entryExpect := store.Entry{
+			Key:  store.Key(v),
+			Val:  "",
+			Stat: store.KStatDel,
+		}
+		entry := ms.Get(entryExpect.Key)
+		if !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
 		}
 	}
 
 	// get all
 	for i, entry := range ms.Entries() {
-		if !assert.Equal(t, store.Key(data[i]), entry.Key) {
-			panic(nil)
+		entryExpect := store.Entry{
+			Key:  store.Key(data[i]),
+			Val:  "",
+			Stat: store.KStatDel,
 		}
-		if !assert.Equal(t, store.Value(""), entry.Val) {
-			panic(nil)
-		}
-		if !assert.Equal(t, store.KStatDel, entry.Stat) {
+		if !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
 		}
 	}
@@ -132,25 +136,24 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// get
-	entries := make(chan concurrentGetEntry, max)
+	results := make(chan checkExistResult, max)
 	for i := 0; i < max; i += step {
-		go checkDataExist(ms, data[i:i+step], entries)
+		go checkDataExist(ms, data[i:i+step], results)
 	}
 	for i := 0; i < max; i++ {
-		if entry := <-entries; !assert.True(t, entry.exist) {
-			panic(fmt.Sprintf("key %v doesn't exist", entry.key))
+		if result := <-results; !assert.True(t, result.exist) {
+			panic(fmt.Sprintf("key %v doesn't exist", result.key))
 		}
 	}
 
 	// get all
 	for i, entry := range ms.Entries() {
-		if !assert.Equal(t, store.Key(data[i]), entry.Key) {
-			panic(nil)
+		entryExpect := store.Entry{
+			Key:  store.Key(data[i]),
+			Val:  store.Value(data[i]),
+			Stat: store.KStatPut,
 		}
-		if !assert.Equal(t, store.Value(data[i]), entry.Val) {
-			panic(nil)
-		}
-		if !assert.Equal(t, store.KStatPut, entry.Stat) {
+		if !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
 		}
 	}
@@ -170,23 +173,22 @@ func TestConcurrency(t *testing.T) {
 
 	// get
 	for i := 0; i < max; i += step {
-		go checkDataExist(ms, data[i:i+step], entries)
+		go checkDataExist(ms, data[i:i+step], results)
 	}
 	for i := 0; i < max; i++ {
-		if entry := <-entries; !assert.False(t, entry.exist) {
-			panic(fmt.Sprintf("key %v not deleted", entry.key))
+		if result := <-results; !assert.False(t, result.exist) {
+			panic(fmt.Sprintf("key %v not deleted", result.key))
 		}
 	}
 
 	// get all
 	for i, entry := range ms.Entries() {
-		if !assert.Equal(t, store.Key(data[i]), entry.Key) {
-			panic(nil)
+		entryExpect := store.Entry{
+			Key:  store.Key(data[i]),
+			Val:  "",
+			Stat: store.KStatDel,
 		}
-		if !assert.Equal(t, store.Value(""), entry.Val) {
-			panic(nil)
-		}
-		if !assert.Equal(t, store.KStatDel, entry.Stat) {
+		if !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
 		}
 	}
@@ -208,14 +210,14 @@ func delData(ms *MemStore, data []string, finishes chan bool) {
 	finishes <- true
 }
 
-func checkDataExist(ms *MemStore, data []string, entries chan concurrentGetEntry) {
+func checkDataExist(ms *MemStore, data []string, results chan checkExistResult) {
 	sleepRand()
 	for _, v := range data {
-		val, found := ms.Get(store.Key(v))
-		if !found || val != store.Value(v) {
-			entries <- concurrentGetEntry{key: store.Key(v), exist: false}
+		entry := ms.Get(store.Key(v))
+		if entry == nil || entry.Val != store.Value(v) || entry.Stat != store.KStatPut {
+			results <- checkExistResult{key: store.Key(v), exist: false}
 		} else {
-			entries <- concurrentGetEntry{key: store.Key(v), exist: true}
+			results <- checkExistResult{key: store.Key(v), exist: true}
 		}
 	}
 }
