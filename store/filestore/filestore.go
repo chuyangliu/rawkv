@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/chuyangliu/rawkv/store"
 	"github.com/chuyangliu/rawkv/store/memstore"
@@ -16,6 +17,7 @@ type FileStore struct {
 	path     string             // path to store file
 	memStore *memstore.MemStore // read-only, reset to nil after flushed
 	blkIdx   *blockIndex        // in-memory index to locate blocks in store file
+	lock     sync.RWMutex
 }
 
 // New instantiates a FileStore.
@@ -29,8 +31,12 @@ func New(path string, ms *memstore.MemStore) *FileStore {
 	}
 }
 
-// Flush persists MemStore to store file. Require MemStore not nil.
+// Flush persists MemStore to store file. Can be called only once.
 func (fs *FileStore) Flush(blkSize store.KVLen) error {
+	if fs.memStore == nil {
+		return fmt.Errorf("No MemStore to flush")
+	}
+
 	file, err := os.OpenFile(fs.path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0666)
 	if err != nil {
 		return fmt.Errorf("Open file failed | path=%v | err=[%w]", fs.path, err)
@@ -92,14 +98,21 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 		return fmt.Errorf("Flush writer failed | path=%v | err=[%w]", fs.path, err)
 	}
 
+	fs.lock.Lock()
 	fs.memStore = nil
+	fs.lock.Unlock()
+
 	return nil
 }
 
 // Get returns the entry associated with the key, or nil if not exist.
 func (fs *FileStore) Get(key store.Key) (*store.Entry, error) {
-	if fs.memStore != nil {
-		entry := fs.memStore.Get(key)
+	fs.lock.RLock()
+	ms := fs.memStore
+	fs.lock.RUnlock()
+
+	if ms != nil {
+		entry := ms.Get(key)
 		return entry, nil
 	}
 
