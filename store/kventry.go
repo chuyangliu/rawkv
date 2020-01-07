@@ -21,18 +21,8 @@ func KeyCmp(k1, k2 interface{}) int {
 	}
 }
 
-// Str converts Key to string.
-func (k *Key) Str() string {
-	return string(*k)
-}
-
 // Value stores the type of values (i.e., byte string).
 type Value string
-
-// Str converts Value to string.
-func (v *Value) Str() string {
-	return string(*v)
-}
 
 // KStat stores the status of keys (i.e., Put or Deleted).
 type KStat uint8

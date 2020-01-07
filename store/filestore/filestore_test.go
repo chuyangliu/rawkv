@@ -1,6 +1,8 @@
 package filestore
 
 import (
+	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/chuyangliu/rawkv/store"
@@ -8,18 +10,33 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestFlush(t *testing.T) {
-	const max = 1000
-	const blkSize = store.KVLen(1 << 18)
-	const path = "./filestore.test"
+func TestBasic(t *testing.T) {
+	max := 1
+	blkSize := store.KVLen(1 << 18)
+	path := "./filestore.test"
 
-	ms := memstore.New()
+	// create data
+	data := make([]string, max)
 	for i := 0; i < max; i++ {
-		ms.Put(store.Key(i), store.Value(i))
+		data[i] = strconv.Itoa(i)
+	}
+	sort.Strings(data)
+
+	// create MemStore
+	ms := memstore.New()
+	for _, v := range data {
+		ms.Put(store.Key(v), store.Value(v))
 	}
 
-	fs := NewFromMem(path, blkSize, ms)
-	if err := fs.flush(); !assert.NoError(t, err) {
+	// create FileStore from MemStore
+	fsMem := NewFromMem(path, ms)
+	if err := fsMem.Flush(blkSize); !assert.NoError(t, err) {
+		panic(nil)
+	}
+
+	// create FileStore from flushed store file
+	_, err := NewFromFile(path)
+	if !assert.NoError(t, err) {
 		panic(nil)
 	}
 }
