@@ -23,7 +23,7 @@ type Logger struct {
 // New instantiates a Logger.
 func New(level int) *Logger {
 	return &Logger{
-		logger: log.New(os.Stderr, "", log.LstdFlags|log.LUTC|log.Lshortfile),
+		logger: log.New(os.Stderr, "", log.LstdFlags|log.Lmicroseconds|log.LUTC|log.Lshortfile),
 		level:  level,
 	}
 }
