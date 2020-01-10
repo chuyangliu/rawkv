@@ -8,16 +8,21 @@ import (
 	"os"
 	"sync"
 
+	"github.com/chuyangliu/rawkv/logging"
 	"github.com/chuyangliu/rawkv/store"
 	"github.com/chuyangliu/rawkv/store/memstore"
 )
 
+var (
+	logger = logging.New(logging.LevelInfo)
+)
+
 // FileStore persists key-value data as an immutable file on disk.
 type FileStore struct {
-	path     string             // path to store file
-	memStore *memstore.MemStore // read-only, reset to nil after flushed
-	blkIdx   *blockIndex        // in-memory index to locate blocks in store file
-	lock     sync.RWMutex
+	path string             // path to store file
+	mem  *memstore.MemStore // read-only, reset to nil after flushed
+	idx  *blockIndex        // index to locate blocks in store file
+	lock sync.RWMutex
 }
 
 // New instantiates a FileStore.
@@ -25,15 +30,24 @@ type FileStore struct {
 // Otherwise, ms will be used to back FileStore and can be flushed to store file.
 func New(path string, ms *memstore.MemStore) *FileStore {
 	return &FileStore{
-		path:     path,
-		memStore: ms,
-		blkIdx:   nil,
+		path: path,
+		mem:  ms,
+		idx:  nil,
 	}
+}
+
+// BeginFlush flushes MemStore in background.
+func (fs *FileStore) BeginFlush(blkSize store.KVLen) {
+	go func() {
+		if err := fs.Flush(blkSize); err != nil {
+			logger.Error("Background flush failed | path=%v | err=[%w]", fs.path, err)
+		}
+	}()
 }
 
 // Flush persists MemStore to store file. Can be called only once.
 func (fs *FileStore) Flush(blkSize store.KVLen) error {
-	if fs.memStore == nil {
+	if fs.mem == nil {
 		return fmt.Errorf("No MemStore to flush")
 	}
 
@@ -44,18 +58,18 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	fs.blkIdx = newBlockIndex()
+	fs.idx = newBlockIndex()
 	sizeTot := store.KVLen(0)
 	sizeCur := store.KVLen(0)
 	sizeIdx := store.KVLen(0)
 
 	// persist key-value data
-	for i, entry := range fs.memStore.Entries() {
+	for i, entry := range fs.mem.Entries() {
 
 		if i == 0 || sizeCur >= blkSize { // first block or finish one block write
 			// set block length
-			if !fs.blkIdx.empty() {
-				fs.blkIdx.last().len = sizeCur
+			if !fs.idx.empty() {
+				fs.idx.last().len = sizeCur
 			}
 			// create index entry for new block
 			idxEntry := &blockIndexEntry{
@@ -63,7 +77,7 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 				off: sizeTot,
 				len: 0, // set later
 			}
-			fs.blkIdx.add(idxEntry)
+			fs.idx.add(idxEntry)
 			sizeIdx += idxEntry.size()
 			// reset sizes
 			sizeCur = 0
@@ -78,12 +92,12 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 	}
 
 	// set last block length
-	if !fs.blkIdx.empty() && sizeCur > 0 {
-		fs.blkIdx.last().len = sizeCur
+	if !fs.idx.empty() && sizeCur > 0 {
+		fs.idx.last().len = sizeCur
 	}
 
 	// persist block index
-	for _, entry := range fs.blkIdx.entries() {
+	for _, entry := range fs.idx.entries() {
 		if err := writeBlockIndexEntry(writer, entry); err != nil {
 			return fmt.Errorf("Write block index entry failed | path=%v | entry=%v | err=[%w]", fs.path, *entry, err)
 		}
@@ -99,7 +113,7 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 	}
 
 	fs.lock.Lock()
-	fs.memStore = nil
+	fs.mem = nil
 	fs.lock.Unlock()
 
 	return nil
@@ -108,7 +122,7 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 // Get returns the entry associated with the key, or nil if not exist.
 func (fs *FileStore) Get(key store.Key) (*store.Entry, error) {
 	fs.lock.RLock()
-	ms := fs.memStore
+	ms := fs.mem
 	fs.lock.RUnlock()
 
 	if ms != nil {
@@ -116,15 +130,15 @@ func (fs *FileStore) Get(key store.Key) (*store.Entry, error) {
 		return entry, nil
 	}
 
-	if fs.blkIdx == nil {
-		blkIdx, err := readBlockIndex(fs.path)
+	if fs.idx == nil {
+		idx, err := readBlockIndex(fs.path)
 		if err != nil {
 			return nil, fmt.Errorf("Read block index failed | path=%v | err=[%w]", fs.path, err)
 		}
-		fs.blkIdx = blkIdx
+		fs.idx = idx
 	}
 
-	idxEntry := fs.blkIdx.get(key)
+	idxEntry := fs.idx.get(key)
 	if idxEntry == nil { // not exist
 		return nil, nil
 	}
@@ -168,7 +182,7 @@ func readBlockIndex(path string) (*blockIndex, error) {
 	}
 
 	reader := bytes.NewReader(raw)
-	blkIdx := newBlockIndex()
+	idx := newBlockIndex()
 	size := store.KVLen(0)
 
 	// read index entries
@@ -178,11 +192,11 @@ func readBlockIndex(path string) (*blockIndex, error) {
 			return nil, fmt.Errorf("Read index entry failed | path=%v | size=%v | idxLen=%v | err=[%w]",
 				path, size, idxLen, err)
 		}
-		blkIdx.add(entry)
+		idx.add(entry)
 		size += entry.size()
 	}
 
-	return blkIdx, nil
+	return idx, nil
 }
 
 func readBlock(path string, idxEntry *blockIndexEntry) (*fileBlock, error) {
