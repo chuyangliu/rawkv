@@ -28,12 +28,20 @@ type FileStore struct {
 // New instantiates a FileStore.
 // If ms is nil, the FileStore is backed by store file on disk.
 // Otherwise, ms will be used to back FileStore and can be flushed to store file.
-func New(path string, ms *memstore.MemStore) *FileStore {
-	return &FileStore{
+func New(path string, ms *memstore.MemStore) (*FileStore, error) {
+	fs := &FileStore{
 		path: path,
 		mem:  ms,
 		idx:  nil,
 	}
+	if ms == nil { // back by store file
+		idx, err := readBlockIndex(path)
+		if err != nil {
+			return nil, fmt.Errorf("Read block index failed | path=%v | err=[%w]", path, err)
+		}
+		fs.idx = idx
+	}
+	return fs, nil
 }
 
 // BeginFlush flushes MemStore in background.
@@ -128,14 +136,6 @@ func (fs *FileStore) Get(key store.Key) (*store.Entry, error) {
 	if ms != nil {
 		entry := ms.Get(key)
 		return entry, nil
-	}
-
-	if fs.idx == nil {
-		idx, err := readBlockIndex(fs.path)
-		if err != nil {
-			return nil, fmt.Errorf("Read block index failed | path=%v | err=[%w]", fs.path, err)
-		}
-		fs.idx = idx
 	}
 
 	idxEntry := fs.idx.get(key)

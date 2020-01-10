@@ -38,7 +38,10 @@ func TestBasic(t *testing.T) {
 	}
 
 	// create FileStore from MemStore
-	fs := New(path, ms)
+	fs, err := New(path, ms)
+	if !assert.NoError(t, err) {
+		panic(nil)
+	}
 
 	// get
 	for _, v := range data {
@@ -72,7 +75,10 @@ func TestBasic(t *testing.T) {
 	}
 
 	// create FileStore from disk
-	fs = New(path, nil)
+	fs, err = New(path, nil)
+	if !assert.NoError(t, err) {
+		panic(nil)
+	}
 
 	// get
 	for _, v := range data {
@@ -108,7 +114,10 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// create FileStore from MemStore
-	fs := New(path, ms)
+	fs, err := New(path, ms)
+	if !assert.NoError(t, err) {
+		panic(nil)
+	}
 
 	// get in background
 	results := make(chan checkExistResult, max)
@@ -120,6 +129,24 @@ func TestConcurrency(t *testing.T) {
 	sleepRand()
 	if err := fs.Flush(blkSize); !assert.NoError(t, err) {
 		panic(nil)
+	}
+
+	// check existence
+	for i := 0; i < max; i++ {
+		if result := <-results; !assert.True(t, result.exist) {
+			panic(fmt.Sprintf("key %v doesn't exist", result.key))
+		}
+	}
+
+	// create FileStore from disk
+	fs, err = New(path, nil)
+	if !assert.NoError(t, err) {
+		panic(nil)
+	}
+
+	// get in background
+	for i := 0; i < max; i += step {
+		go checkDataExist(fs, data[i:i+step], results)
 	}
 
 	// check existence
@@ -149,5 +176,5 @@ func checkDataExist(fs *FileStore, data []string, results chan checkExistResult)
 
 func sleepRand() {
 	rand.Seed(time.Now().UnixNano())
-	time.Sleep(time.Duration(rand.Intn(5000)) * time.Microsecond)
+	time.Sleep(time.Duration(rand.Intn(10000)) * time.Microsecond)
 }
