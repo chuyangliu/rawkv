@@ -58,15 +58,37 @@ func (s *Shard) Put(key store.Key, val store.Value) error {
 	s.mem.Put(key, val)
 	// check flush
 	if s.mem.Size() >= s.flushThresh {
-		filePath := s.nextFilePath()
-		fs, err := filestore.New(filePath, s.mem)
-		if err != nil {
-			return fmt.Errorf("Create FileStore failed | path=%v | err=[%w]", filePath, err)
+		if err := s.flush(); err != nil {
+			return fmt.Errorf("Flush failed | rootdir=%v | err=[%w]", s.rootdir, err)
 		}
-		fs.BeginFlush(s.blkSize)
-		s.files = append(s.files, fs)
-		s.mem = memstore.New()
 	}
+	return nil
+}
+
+// Del removes a key-value pair from the shard.
+func (s *Shard) Del(key store.Key) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	// write MemStore
+	s.mem.Del(key)
+	// check flush
+	if s.mem.Size() >= s.flushThresh {
+		if err := s.flush(); err != nil {
+			return fmt.Errorf("Flush failed | rootdir=%v | err=[%w]", s.rootdir, err)
+		}
+	}
+	return nil
+}
+
+func (s *Shard) flush() error {
+	filePath := s.nextFilePath()
+	fs, err := filestore.New(filePath, s.mem)
+	if err != nil {
+		return fmt.Errorf("Create FileStore failed | path=%v | err=[%w]", filePath, err)
+	}
+	fs.BeginFlush(s.blkSize)
+	s.files = append(s.files, fs)
+	s.mem = memstore.New()
 	return nil
 }
 

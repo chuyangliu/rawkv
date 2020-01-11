@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type putDataResult struct {
+type putDelResult struct {
 	key store.Key
 	err error
 }
@@ -64,6 +64,26 @@ func TestBasic(t *testing.T) {
 			panic(nil)
 		}
 	}
+
+	// del
+	for _, v := range data {
+		if err := s.Del(store.Key(v)); !assert.NoError(t, err) {
+			panic(nil)
+		}
+	}
+
+	// get
+	for _, v := range data {
+		entryExpect := store.Entry{
+			Key:  store.Key(v),
+			Val:  "",
+			Stat: store.KStatDel,
+		}
+		entry, err := s.Get(entryExpect.Key)
+		if !assert.NoError(t, err) || !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
+			panic(nil)
+		}
+	}
 }
 
 func TestConcurrency(t *testing.T) {
@@ -89,7 +109,7 @@ func TestConcurrency(t *testing.T) {
 	s := New(rootdir, flushThresh, blkSize)
 
 	// put
-	putResults := make(chan putDataResult, max)
+	putResults := make(chan putDelResult, max)
 	for i := 0; i < max; i += step {
 		go putData(s, data[i:i+step], putResults)
 	}
@@ -109,13 +129,42 @@ func TestConcurrency(t *testing.T) {
 			panic(fmt.Sprintf("Get %v failed", result.key))
 		}
 	}
+
+	// del
+	delResults := make(chan putDelResult, max)
+	for i := 0; i < max; i += step {
+		go delData(s, data[i:i+step], delResults)
+	}
+	for i := 0; i < max; i++ {
+		if result := <-delResults; !assert.NoError(t, result.err) {
+			panic(fmt.Sprintf("Del %v failed", result.key))
+		}
+	}
+
+	// get
+	for i := 0; i < max; i += step {
+		go checkDataExist(s, data[i:i+step], getResults)
+	}
+	for i := 0; i < max; i++ {
+		if result := <-getResults; !assert.NoError(t, result.err) || !assert.False(t, result.exist) {
+			panic(fmt.Sprintf("Del %v failed", result.key))
+		}
+	}
 }
 
-func putData(s *Shard, data []string, results chan putDataResult) {
+func putData(s *Shard, data []string, results chan putDelResult) {
 	sleepRand()
 	for _, v := range data {
 		err := s.Put(store.Key(v), store.Value(v))
-		results <- putDataResult{key: store.Key(v), err: err}
+		results <- putDelResult{key: store.Key(v), err: err}
+	}
+}
+
+func delData(s *Shard, data []string, results chan putDelResult) {
+	sleepRand()
+	for _, v := range data {
+		err := s.Del(store.Key(v))
+		results <- putDelResult{key: store.Key(v), err: err}
 	}
 }
 

@@ -64,7 +64,15 @@ func (ms *MemStore) Get(key store.Key) *store.Entry {
 func (ms *MemStore) Del(key store.Key) {
 	ms.lock.Lock()
 	defer ms.lock.Unlock()
-	if entry := ms.getUnsafe(key); entry != nil { // update only if entry exists
+	if entry := ms.getUnsafe(key); entry == nil {
+		entry = &store.Entry{
+			Key:  key,
+			Val:  "",
+			Stat: store.KStatDel,
+		}
+		ms.data.Put(key, entry)
+		ms.size += entry.Size()
+	} else {
 		ms.size -= entry.Size()
 		entry.Val = ""
 		entry.Stat = store.KStatDel
