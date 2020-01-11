@@ -58,5 +58,5 @@ func (l *Logger) Error(format string, operands ...interface{}) {
 
 func (l *Logger) write(typ string, format string, operands ...interface{}) {
 	fullFormat := fmt.Sprintf("[%v] %v", typ, format)
-	l.logger.Output(2, fmt.Sprintf(fullFormat, operands...))
+	l.logger.Output(3, fmt.Sprintf(fullFormat, operands...))
 }
