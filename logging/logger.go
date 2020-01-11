@@ -30,28 +30,28 @@ func New(level int) *Logger {
 
 // Debug writes formatted log with debug messages.
 func (l *Logger) Debug(format string, operands ...interface{}) {
-	if l.level >= LevelDebug {
+	if l.level <= LevelDebug {
 		l.write("DEBUG", format, operands...)
 	}
 }
 
 // Info writes formatted log with information messages.
 func (l *Logger) Info(format string, operands ...interface{}) {
-	if l.level >= LevelInfo {
+	if l.level <= LevelInfo {
 		l.write("INFO", format, operands...)
 	}
 }
 
 // Warn writes formatted log with warning messages.
 func (l *Logger) Warn(format string, operands ...interface{}) {
-	if l.level >= LevelWarn {
+	if l.level <= LevelWarn {
 		l.write("WARN", format, operands...)
 	}
 }
 
 // Error writes formatted log with error messages.
 func (l *Logger) Error(format string, operands ...interface{}) {
-	if l.level >= LevelError {
+	if l.level <= LevelError {
 		l.write("ERROR", format, operands...)
 	}
 }
