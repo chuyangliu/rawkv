@@ -17,9 +17,15 @@ func NewMgr(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Manag
 	}
 }
 
-// Get returns the entry associated with the key, or nil if not exist.
-func (m *Manager) Get(key store.Key) (*store.Entry, error) {
-	return m.shards[0].Get(key)
+// Get returns the value associated with the key, and a boolean indicating whether the key exists.
+func (m *Manager) Get(key store.Key) (store.Value, bool, error) {
+	entry, err := m.shards[0].Get(key)
+	if err != nil {
+		return "", false, err
+	} else if entry == nil {
+		return "", false, nil
+	}
+	return entry.Val, true, nil
 }
 
 // Put adds or updates a key-value pair to the shards.

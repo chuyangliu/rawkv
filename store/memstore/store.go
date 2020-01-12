@@ -44,7 +44,12 @@ func (s *Store) Size() store.KVLen {
 func (s *Store) Get(key store.Key) *store.Entry {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return s.getUnsafe(key)
+	entry := s.getUnsafe(key)
+	if entry == nil {
+		return nil
+	}
+	copy := *entry // make a copy to prevent concurrent writes from modifying the returned entry
+	return &copy
 }
 
 // Put adds or updates a key-value pair to the store.

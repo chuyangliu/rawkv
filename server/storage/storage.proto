@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+service Storage {
+    // Get returns the value associated with the key, and a boolean indicating whether the key exists.
+    rpc Get(GetReq) returns (GetResp) {}
+    // Put adds or updates a key-value pair to the storage.
+    rpc Put(PutReq) returns (PutResp) {}
+    // Del removes key from the storage.
+    rpc Del(DelReq) returns (DelResp) {}
+}
+
+message GetReq {
+    bytes key = 1;
+}
+
+message GetResp {
+    bytes val = 1;
+    bool found = 2;
+}
+
+message PutReq {
+    bytes key = 1;
+    bytes val = 2;
+}
+
+message PutResp {
+}
+
+message DelReq {
+    bytes key = 1;
+}
+
+message DelResp {
+}
