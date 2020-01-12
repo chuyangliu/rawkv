@@ -30,15 +30,15 @@ func TestBasic(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
 	rand.Shuffle(len(data), func(i, j int) { data[i], data[j] = data[j], data[i] })
 
-	tm := New(store.KeyCmp)
+	m := New(store.KeyCmp)
 	for _, entry := range data {
-		tm.Put(entry.key, entry.val)
+		m.Put(entry.key, entry.val)
 	}
 
 	sort.Slice(data, func(i, j int) bool { return data[i].key < data[j].key })
 
-	for i, rawKey := range tm.Keys() {
-		rawVal, _ := tm.Get(rawKey)
+	for i, rawKey := range m.Keys() {
+		rawVal, _ := m.Get(rawKey)
 
 		if !assert.Equal(t, data[i].key, rawKey) {
 			panic(nil)
@@ -48,7 +48,7 @@ func TestBasic(t *testing.T) {
 		}
 	}
 
-	for i, rawVal := range tm.Values() {
+	for i, rawVal := range m.Values() {
 		if !assert.Equal(t, data[i].val, rawVal) {
 			panic(nil)
 		}

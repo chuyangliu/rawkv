@@ -17,19 +17,19 @@ var (
 	logger = logging.New(logging.LevelInfo)
 )
 
-// FileStore persists key-value data as an immutable file on disk.
-type FileStore struct {
-	path string             // path to store file
-	mem  *memstore.MemStore // read-only, reset to nil after flushed
-	idx  *blockIndex        // index to locate blocks in store file
+// Store persists key-value data as an immutable file on disk.
+type Store struct {
+	path string          // path to store file
+	mem  *memstore.Store // read-only, reset to nil after flushed
+	idx  *blockIndex     // index to locate blocks in store file
 	lock sync.RWMutex
 }
 
 // New instantiates a FileStore.
 // If ms is nil, the FileStore is backed by store file on disk.
 // Otherwise, ms will be used to back FileStore and can be flushed to store file.
-func New(path string, ms *memstore.MemStore) (*FileStore, error) {
-	fs := &FileStore{
+func New(path string, ms *memstore.Store) (*Store, error) {
+	s := &Store{
 		path: path,
 		mem:  ms,
 		idx:  nil,
@@ -39,45 +39,45 @@ func New(path string, ms *memstore.MemStore) (*FileStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("Read block index failed | path=%v | err=[%w]", path, err)
 		}
-		fs.idx = idx
+		s.idx = idx
 	}
-	return fs, nil
+	return s, nil
 }
 
 // BeginFlush flushes MemStore in background.
-func (fs *FileStore) BeginFlush(blkSize store.KVLen) {
+func (s *Store) BeginFlush(blkSize store.KVLen) {
 	go func() {
-		if err := fs.Flush(blkSize); err != nil {
-			logger.Error("Background flush failed | path=%v | err=[%w]", fs.path, err)
+		if err := s.Flush(blkSize); err != nil {
+			logger.Error("Background flush failed | path=%v | err=[%w]", s.path, err)
 		}
 	}()
 }
 
 // Flush persists MemStore to store file. Can be called only once.
-func (fs *FileStore) Flush(blkSize store.KVLen) error {
-	if fs.mem == nil {
+func (s *Store) Flush(blkSize store.KVLen) error {
+	if s.mem == nil {
 		return fmt.Errorf("No MemStore to flush")
 	}
 
-	file, err := os.OpenFile(fs.path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0666)
+	file, err := os.OpenFile(s.path, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0666)
 	if err != nil {
-		return fmt.Errorf("Open file failed | path=%v | err=[%w]", fs.path, err)
+		return fmt.Errorf("Open file failed | path=%v | err=[%w]", s.path, err)
 	}
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	fs.idx = newBlockIndex()
+	s.idx = newBlockIndex()
 	sizeTot := store.KVLen(0)
 	sizeCur := store.KVLen(0)
 	sizeIdx := store.KVLen(0)
 
 	// persist key-value data
-	for i, entry := range fs.mem.Entries() {
+	for i, entry := range s.mem.Entries() {
 
 		if i == 0 || sizeCur >= blkSize { // first block or finish one block write
 			// set block length
-			if !fs.idx.empty() {
-				fs.idx.last().len = sizeCur
+			if !s.idx.empty() {
+				s.idx.last().len = sizeCur
 			}
 			// create index entry for new block
 			idxEntry := &blockIndexEntry{
@@ -85,14 +85,14 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 				off: sizeTot,
 				len: 0, // set later
 			}
-			fs.idx.add(idxEntry)
+			s.idx.add(idxEntry)
 			sizeIdx += idxEntry.size()
 			// reset sizes
 			sizeCur = 0
 		}
 
 		if err := writeKVEntry(writer, entry); err != nil {
-			return fmt.Errorf("Write kv entry failed | path=%v | entry=%v | err=[%w]", fs.path, *entry, err)
+			return fmt.Errorf("Write kv entry failed | path=%v | entry=%v | err=[%w]", s.path, *entry, err)
 		}
 
 		sizeCur += entry.Size()
@@ -100,52 +100,52 @@ func (fs *FileStore) Flush(blkSize store.KVLen) error {
 	}
 
 	// set last block length
-	if !fs.idx.empty() && sizeCur > 0 {
-		fs.idx.last().len = sizeCur
+	if !s.idx.empty() && sizeCur > 0 {
+		s.idx.last().len = sizeCur
 	}
 
 	// persist block index
-	for _, entry := range fs.idx.entries() {
+	for _, entry := range s.idx.entries() {
 		if err := writeBlockIndexEntry(writer, entry); err != nil {
-			return fmt.Errorf("Write block index entry failed | path=%v | entry=%v | err=[%w]", fs.path, *entry, err)
+			return fmt.Errorf("Write block index entry failed | path=%v | entry=%v | err=[%w]", s.path, *entry, err)
 		}
 	}
 
 	// persist block index length
 	if err := writeKVLen(writer, sizeIdx); err != nil {
-		return fmt.Errorf("Write block index length failed | path=%v | sizeIdx=%v | err=[%w]", fs.path, sizeIdx, err)
+		return fmt.Errorf("Write block index length failed | path=%v | sizeIdx=%v | err=[%w]", s.path, sizeIdx, err)
 	}
 
 	if err := writer.Flush(); err != nil {
-		return fmt.Errorf("Flush writer failed | path=%v | err=[%w]", fs.path, err)
+		return fmt.Errorf("Flush writer failed | path=%v | err=[%w]", s.path, err)
 	}
 
-	fs.lock.Lock()
-	fs.mem = nil
-	fs.lock.Unlock()
+	s.lock.Lock()
+	s.mem = nil
+	s.lock.Unlock()
 
 	return nil
 }
 
 // Get returns the entry associated with the key, or nil if not exist.
-func (fs *FileStore) Get(key store.Key) (*store.Entry, error) {
-	fs.lock.RLock()
-	ms := fs.mem
-	fs.lock.RUnlock()
+func (s *Store) Get(key store.Key) (*store.Entry, error) {
+	s.lock.RLock()
+	ms := s.mem
+	s.lock.RUnlock()
 
 	if ms != nil {
 		entry := ms.Get(key)
 		return entry, nil
 	}
 
-	idxEntry := fs.idx.get(key)
+	idxEntry := s.idx.get(key)
 	if idxEntry == nil { // not exist
 		return nil, nil
 	}
 
-	blk, err := readBlock(fs.path, idxEntry)
+	blk, err := readBlock(s.path, idxEntry)
 	if err != nil {
-		return nil, fmt.Errorf("Read block failed | path=%v | err=[%w]", fs.path, err)
+		return nil, fmt.Errorf("Read block failed | path=%v | err=[%w]", s.path, err)
 	}
 
 	entry := blk.get(key)

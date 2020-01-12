@@ -157,7 +157,7 @@ func TestConcurrency(t *testing.T) {
 	}
 }
 
-func checkDataExist(fs *FileStore, data []string, results chan checkExistResult) {
+func checkDataExist(fs *Store, data []string, results chan checkExistResult) {
 	sleepRand()
 	for _, v := range data {
 		entryExpect := store.Entry{

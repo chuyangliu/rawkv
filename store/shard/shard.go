@@ -12,11 +12,11 @@ import (
 
 // Shard stores a range of key-value data.
 type Shard struct {
-	rootdir     string                 // path to root directory to persist FileStores
-	flushThresh store.KVLen            // threshold in bytes to flush MemStore
-	blkSize     store.KVLen            // block size in bytes of FileStore
-	mem         *memstore.MemStore     // single MemStore
-	files       []*filestore.FileStore // multiple FileStores from oldest to newest
+	rootdir     string             // path to root directory to persist FileStores
+	flushThresh store.KVLen        // threshold in bytes to flush MemStore
+	blkSize     store.KVLen        // block size in bytes of FileStore
+	mem         *memstore.Store    // single MemStore
+	files       []*filestore.Store // multiple FileStores from oldest to newest
 	lock        sync.RWMutex
 }
 
@@ -27,7 +27,7 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Shard {
 		flushThresh: flushThresh,
 		blkSize:     blkSize,
 		mem:         memstore.New(),
-		files:       make([]*filestore.FileStore, 0),
+		files:       make([]*filestore.Store, 0),
 	}
 }
 
