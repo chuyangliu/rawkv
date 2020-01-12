@@ -1,7 +1,7 @@
 package filestore
 
 import (
-	"github.com/chuyangliu/rawkv/store"
+	"github.com/chuyangliu/rawkv/pkg/store"
 )
 
 type blockIndexEntry struct {

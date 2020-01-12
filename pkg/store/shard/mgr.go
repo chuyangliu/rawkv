@@ -1,7 +1,7 @@
 package shard
 
 import (
-	"github.com/chuyangliu/rawkv/store"
+	"github.com/chuyangliu/rawkv/pkg/store"
 )
 
 // Manager manages a collection of Shards.

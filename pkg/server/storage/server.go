@@ -3,9 +3,9 @@ package storage
 import (
 	"context"
 
-	"github.com/chuyangliu/rawkv/logging"
-	"github.com/chuyangliu/rawkv/store"
-	"github.com/chuyangliu/rawkv/store/shard"
+	"github.com/chuyangliu/rawkv/pkg/logging"
+	"github.com/chuyangliu/rawkv/pkg/store"
+	"github.com/chuyangliu/rawkv/pkg/store/shard"
 )
 
 var (

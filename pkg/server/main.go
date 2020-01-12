@@ -8,9 +8,9 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/chuyangliu/rawkv/logging"
-	"github.com/chuyangliu/rawkv/server/storage"
-	"github.com/chuyangliu/rawkv/store"
+	"github.com/chuyangliu/rawkv/pkg/logging"
+	"github.com/chuyangliu/rawkv/pkg/server/storage"
+	"github.com/chuyangliu/rawkv/pkg/store"
 )
 
 var (

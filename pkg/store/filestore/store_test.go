@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chuyangliu/rawkv/store"
-	"github.com/chuyangliu/rawkv/store/memstore"
+	"github.com/chuyangliu/rawkv/pkg/store"
+	"github.com/chuyangliu/rawkv/pkg/store/memstore"
 	"github.com/stretchr/testify/assert"
 )
 

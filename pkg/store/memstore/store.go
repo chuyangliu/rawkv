@@ -3,8 +3,8 @@ package memstore
 import (
 	"sync"
 
-	"github.com/chuyangliu/rawkv/algods/treemap"
-	"github.com/chuyangliu/rawkv/store"
+	"github.com/chuyangliu/rawkv/pkg/algods/treemap"
+	"github.com/chuyangliu/rawkv/pkg/store"
 )
 
 // Store stores key-value data in memory.

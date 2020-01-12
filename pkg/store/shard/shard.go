@@ -5,9 +5,9 @@ import (
 	"path"
 	"sync"
 
-	"github.com/chuyangliu/rawkv/store"
-	"github.com/chuyangliu/rawkv/store/filestore"
-	"github.com/chuyangliu/rawkv/store/memstore"
+	"github.com/chuyangliu/rawkv/pkg/store"
+	"github.com/chuyangliu/rawkv/pkg/store/filestore"
+	"github.com/chuyangliu/rawkv/pkg/store/memstore"
 )
 
 // Shard stores a range of key-value data.

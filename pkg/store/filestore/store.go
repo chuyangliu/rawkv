@@ -8,9 +8,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/chuyangliu/rawkv/logging"
-	"github.com/chuyangliu/rawkv/store"
-	"github.com/chuyangliu/rawkv/store/memstore"
+	"github.com/chuyangliu/rawkv/pkg/logging"
+	"github.com/chuyangliu/rawkv/pkg/store"
+	"github.com/chuyangliu/rawkv/pkg/store/memstore"
 )
 
 var (
