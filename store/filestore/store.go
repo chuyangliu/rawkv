@@ -44,6 +44,31 @@ func New(path string, ms *memstore.Store) (*Store, error) {
 	return s, nil
 }
 
+// Get returns the entry associated with the key, or nil if not exist.
+func (s *Store) Get(key store.Key) (*store.Entry, error) {
+	s.lock.RLock()
+	ms := s.mem
+	s.lock.RUnlock()
+
+	if ms != nil {
+		entry := ms.Get(key)
+		return entry, nil
+	}
+
+	idxEntry := s.idx.get(key)
+	if idxEntry == nil { // not exist
+		return nil, nil
+	}
+
+	blk, err := readBlock(s.path, idxEntry)
+	if err != nil {
+		return nil, fmt.Errorf("Read block failed | path=%v | err=[%w]", s.path, err)
+	}
+
+	entry := blk.get(key)
+	return entry, nil
+}
+
 // BeginFlush flushes MemStore in background.
 func (s *Store) BeginFlush(blkSize store.KVLen) {
 	go func() {
@@ -125,31 +150,6 @@ func (s *Store) Flush(blkSize store.KVLen) error {
 	s.lock.Unlock()
 
 	return nil
-}
-
-// Get returns the entry associated with the key, or nil if not exist.
-func (s *Store) Get(key store.Key) (*store.Entry, error) {
-	s.lock.RLock()
-	ms := s.mem
-	s.lock.RUnlock()
-
-	if ms != nil {
-		entry := ms.Get(key)
-		return entry, nil
-	}
-
-	idxEntry := s.idx.get(key)
-	if idxEntry == nil { // not exist
-		return nil, nil
-	}
-
-	blk, err := readBlock(s.path, idxEntry)
-	if err != nil {
-		return nil, fmt.Errorf("Read block failed | path=%v | err=[%w]", s.path, err)
-	}
-
-	entry := blk.get(key)
-	return entry, nil
 }
 
 func readBlockIndex(path string) (*blockIndex, error) {

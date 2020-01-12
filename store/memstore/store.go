@@ -40,7 +40,14 @@ func (s *Store) Size() store.KVLen {
 	return s.size
 }
 
-// Put adds a key-value pair to the store.
+// Get returns the entry associated with the key, or nil if not exist.
+func (s *Store) Get(key store.Key) *store.Entry {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return s.getUnsafe(key)
+}
+
+// Put adds or updates a key-value pair to the store.
 func (s *Store) Put(key store.Key, val store.Value) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -51,13 +58,6 @@ func (s *Store) Put(key store.Key, val store.Value) {
 	}
 	s.data.Put(key, entry)
 	s.size += entry.Size()
-}
-
-// Get returns the value associated with the key, and whether the key exists.
-func (s *Store) Get(key store.Key) *store.Entry {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-	return s.getUnsafe(key)
 }
 
 // Del removes key from the store.

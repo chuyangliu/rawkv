@@ -20,8 +20,8 @@ type Shard struct {
 	lock        sync.RWMutex
 }
 
-// New instantiates an empty Shard.
-func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Shard {
+// NewShard instantiates an empty Shard.
+func NewShard(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Shard {
 	return &Shard{
 		rootdir:     rootdir,
 		flushThresh: flushThresh,
@@ -50,7 +50,7 @@ func (s *Shard) Get(key store.Key) (*store.Entry, error) {
 	return nil, nil
 }
 
-// Put adds a key-value pair to the shard.
+// Put adds or updates a key-value pair to the shard.
 func (s *Shard) Put(key store.Key, val store.Value) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -65,7 +65,7 @@ func (s *Shard) Put(key store.Key, val store.Value) error {
 	return nil
 }
 
-// Del removes a key-value pair from the shard.
+// Del removes key from the store.
 func (s *Shard) Del(key store.Key) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
