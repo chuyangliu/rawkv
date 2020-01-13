@@ -1,9 +1,10 @@
-package storage
+package server
 
 import (
 	"context"
 
 	"github.com/chuyangliu/rawkv/pkg/logging"
+	"github.com/chuyangliu/rawkv/pkg/rpc"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	"github.com/chuyangliu/rawkv/pkg/store/shard"
 )
@@ -12,38 +13,42 @@ var (
 	logger = logging.New(logging.LevelInfo)
 )
 
-// DefaultStorageServer is a default implementation of StorageServer interface.
-type DefaultStorageServer struct {
+// Server manages the server running on node.
+type Server struct {
 	mgr *shard.Manager
 }
 
-// NewServer instantiates a storage server.
-func NewServer(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *DefaultStorageServer {
-	return &DefaultStorageServer{
+// New instantiates a Server.
+func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Server {
+	return &Server{
 		mgr: shard.NewMgr(rootdir, flushThresh, blkSize),
 	}
 }
 
+// --------------------------------
+// rpc.StorageServer implementation
+// --------------------------------
+
 // Get returns the value associated with the key, and a boolean indicating whether the key exists.
-func (s *DefaultStorageServer) Get(ctx context.Context, req *GetReq) (*GetResp, error) {
+func (s *Server) Get(ctx context.Context, req *rpc.GetReq) (*rpc.GetResp, error) {
 	val, found, err := s.mgr.Get(store.Key(req.Key))
-	resp := &GetResp{Val: []byte(val), Found: found}
+	resp := &rpc.GetResp{Val: []byte(val), Found: found}
 	logger.Info("Get | req=%+v | resp=%+v", *req, *resp)
 	return resp, err
 }
 
 // Put adds or updates a key-value pair to the storage.
-func (s *DefaultStorageServer) Put(ctx context.Context, req *PutReq) (*PutResp, error) {
+func (s *Server) Put(ctx context.Context, req *rpc.PutReq) (*rpc.PutResp, error) {
 	err := s.mgr.Put(store.Key(req.Key), store.Value(req.Val))
-	resp := &PutResp{}
+	resp := &rpc.PutResp{}
 	logger.Info("Put | req=%+v | resp=%+v", *req, *resp)
 	return resp, err
 }
 
 // Del removes key from the storage.
-func (s *DefaultStorageServer) Del(ctx context.Context, req *DelReq) (*DelResp, error) {
+func (s *Server) Del(ctx context.Context, req *rpc.DelReq) (*rpc.DelResp, error) {
 	err := s.mgr.Del(store.Key(req.Key))
-	resp := &DelResp{}
+	resp := &rpc.DelResp{}
 	logger.Info("Del | req=%+v | resp=%+v", *req, *resp)
 	return resp, err
 }

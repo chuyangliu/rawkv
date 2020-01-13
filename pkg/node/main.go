@@ -9,7 +9,8 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/chuyangliu/rawkv/pkg/logging"
-	"github.com/chuyangliu/rawkv/pkg/server/storage"
+	"github.com/chuyangliu/rawkv/pkg/node/server"
+	"github.com/chuyangliu/rawkv/pkg/rpc"
 	"github.com/chuyangliu/rawkv/pkg/store"
 )
 
@@ -30,26 +31,26 @@ func main() {
 	// parse command-line flags
 	flag.Parse()
 
-	// create gRPC server
-	gRPCSvr := grpc.NewServer()
-
-	// create listener for storage server
+	// create listener for storage RPC service
 	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", *storageHost, *storagePort))
 	if err != nil {
 		logger.Error("Listen failed | storagehost=%v | storageport=%v | err=%v", *storageHost, *storagePort, err)
 		return
 	}
 
-	// create storage server
+	// create root directory
 	if err := os.MkdirAll(*rootdir, 0777); err != nil {
-		logger.Error("Creae root directory failed | rootdir=%v", *rootdir)
+		logger.Error("Create root directory failed | rootdir=%v", *rootdir)
 		return
 	}
-	storageSvr := storage.NewServer(*rootdir, store.KVLen(*flushThresh), store.KVLen(*blkSize))
-	storage.RegisterStorageServer(gRPCSvr, storageSvr)
-	logger.Info("Storage server registered | host=%v | port=%v", *storageHost, *storagePort)
 
-	// start
-	logger.Info("gRPC server started")
-	gRPCSvr.Serve(listener)
+	// create node server
+	nodeSvr := server.New(*rootdir, store.KVLen(*flushThresh), store.KVLen(*blkSize))
+
+	// run gRPC server hosting storage RPC service
+	svr := grpc.NewServer()
+	rpc.RegisterStorageServer(svr, nodeSvr)
+	logger.Info("Storage server started | host=%v | port=%v | rootdir=%v | flushThresh=%v | blkSize=%v",
+		*storageHost, *storagePort, *rootdir, *flushThresh, *blkSize)
+	svr.Serve(listener)
 }
