@@ -22,7 +22,7 @@ func (m *Manager) Get(key store.Key) (store.Value, bool, error) {
 	entry, err := m.shards[0].Get(key)
 	if err != nil {
 		return "", false, err
-	} else if entry == nil {
+	} else if entry == nil || entry.Stat == store.KStatDel {
 		return "", false, nil
 	}
 	return entry.Val, true, nil
