@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -30,18 +30,22 @@ type checkExistResult struct {
 
 func TestBasic(t *testing.T) {
 	max := 1000
-	storageHost := "127.0.0.1"
-	storagePort := 8000
-	rootdir := "./node.test"
+	storageAddr := "127.0.0.1:8000"
+	rootdir := "./server.test"
 	flushThresh := store.KVLen(1024 * 10)
 	blkSize := store.KVLen(1024 * 2)
 
 	// start server
-	go start(storageHost, storagePort, rootdir, flushThresh, blkSize)
+	svr := New(rootdir, flushThresh, blkSize)
+	go func() {
+		if err := svr.Serve(storageAddr); !assert.NoError(t, err) {
+			panic(err)
+		}
+	}()
 	time.Sleep(time.Duration(1) * time.Second) // wait server starts
 
 	// create client
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", storageHost, storagePort), grpc.WithInsecure())
+	conn, err := grpc.Dial(storageAddr, grpc.WithInsecure())
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
@@ -93,18 +97,22 @@ func TestBasic(t *testing.T) {
 func TestConcurrency(t *testing.T) {
 	max := 1000
 	step := 100
-	storageHost := "127.0.0.1"
-	storagePort := 8000
-	rootdir := "./node.test"
+	storageAddr := "127.0.0.1:8001"
+	rootdir := "./server.test"
 	flushThresh := store.KVLen(1024 * 10)
 	blkSize := store.KVLen(1024 * 2)
 
 	// start server
-	go start(storageHost, storagePort, rootdir, flushThresh, blkSize)
+	svr := New(rootdir, flushThresh, blkSize)
+	go func() {
+		if err := svr.Serve(storageAddr); !assert.NoError(t, err) {
+			panic(err)
+		}
+	}()
 	time.Sleep(time.Duration(1) * time.Second) // wait server starts
 
 	// create client
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", storageHost, storagePort), grpc.WithInsecure())
+	conn, err := grpc.Dial(storageAddr, grpc.WithInsecure())
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}

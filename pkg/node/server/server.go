@@ -2,6 +2,11 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"os"
+
+	"google.golang.org/grpc"
 
 	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/rpc"
@@ -15,14 +20,39 @@ var (
 
 // Server manages the server running on node.
 type Server struct {
-	mgr *shard.Manager
+	rootdir string
+	mgr     *shard.Manager
 }
 
 // New instantiates a Server.
 func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Server {
 	return &Server{
-		mgr: shard.NewMgr(rootdir, flushThresh, blkSize),
+		rootdir: rootdir,
+		mgr:     shard.NewMgr(rootdir, flushThresh, blkSize),
 	}
+}
+
+// Serve runs the server instance and start handling incoming requests.
+func (s *Server) Serve(storageAddr string) error {
+
+	// create root directory
+	if err := os.MkdirAll(s.rootdir, 0777); err != nil {
+		return fmt.Errorf("Create root directory failed | rootdir=%v | err=[%w]", s.rootdir, err)
+	}
+
+	// create listener for storage server
+	listener, err := net.Listen("tcp", storageAddr)
+	if err != nil {
+		return fmt.Errorf("Storage server listen failed | addr=%v | err=[%w]", storageAddr, err)
+	}
+
+	// start gRPC server
+	svr := grpc.NewServer()
+	rpc.RegisterStorageServer(svr, s)
+	logger.Info("Storage server started | addr=%v | rootdir=%v", storageAddr, s.rootdir)
+	svr.Serve(listener)
+
+	return nil
 }
 
 // --------------------------------
@@ -33,7 +63,6 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Server {
 func (s *Server) Get(ctx context.Context, req *rpc.GetReq) (*rpc.GetResp, error) {
 	val, found, err := s.mgr.Get(store.Key(req.Key))
 	resp := &rpc.GetResp{Val: []byte(val), Found: found}
-	logger.Info("Get | req=%+v | resp=%+v", *req, *resp)
 	return resp, err
 }
 
@@ -41,7 +70,6 @@ func (s *Server) Get(ctx context.Context, req *rpc.GetReq) (*rpc.GetResp, error)
 func (s *Server) Put(ctx context.Context, req *rpc.PutReq) (*rpc.PutResp, error) {
 	err := s.mgr.Put(store.Key(req.Key), store.Value(req.Val))
 	resp := &rpc.PutResp{}
-	logger.Info("Put | req=%+v | resp=%+v", *req, *resp)
 	return resp, err
 }
 
@@ -49,6 +77,5 @@ func (s *Server) Put(ctx context.Context, req *rpc.PutReq) (*rpc.PutResp, error)
 func (s *Server) Del(ctx context.Context, req *rpc.DelReq) (*rpc.DelResp, error) {
 	err := s.mgr.Del(store.Key(req.Key))
 	resp := &rpc.DelResp{}
-	logger.Info("Del | req=%+v | resp=%+v", *req, *resp)
 	return resp, err
 }
