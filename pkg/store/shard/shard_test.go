@@ -43,7 +43,7 @@ func TestBasic(t *testing.T) {
 	sort.Strings(data)
 
 	// create Shard
-	s := NewShard(rootdir, flushThresh, blkSize)
+	s := New(rootdir, flushThresh, blkSize)
 
 	// put
 	for _, v := range data {
@@ -106,7 +106,7 @@ func TestConcurrency(t *testing.T) {
 	sort.Strings(data)
 
 	// create Shard
-	s := NewShard(rootdir, flushThresh, blkSize)
+	s := New(rootdir, flushThresh, blkSize)
 
 	// put
 	putResults := make(chan putDelResult, max)

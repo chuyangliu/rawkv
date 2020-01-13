@@ -20,8 +20,8 @@ type Shard struct {
 	lock        sync.RWMutex
 }
 
-// NewShard instantiates an empty Shard.
-func NewShard(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Shard {
+// New instantiates an empty Shard.
+func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Shard {
 	return &Shard{
 		rootdir:     rootdir,
 		flushThresh: flushThresh,

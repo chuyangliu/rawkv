@@ -9,9 +9,9 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/chuyangliu/rawkv/pkg/logging"
+	"github.com/chuyangliu/rawkv/pkg/node/shardmgr"
 	"github.com/chuyangliu/rawkv/pkg/rpc"
 	"github.com/chuyangliu/rawkv/pkg/store"
-	"github.com/chuyangliu/rawkv/pkg/store/shard"
 )
 
 var (
@@ -21,14 +21,14 @@ var (
 // Server manages the server running on node.
 type Server struct {
 	rootdir string
-	mgr     *shard.Manager
+	mgr     *shardmgr.Manager
 }
 
 // New instantiates a Server.
 func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Server {
 	return &Server{
 		rootdir: rootdir,
-		mgr:     shard.NewMgr(rootdir, flushThresh, blkSize),
+		mgr:     shardmgr.New(rootdir, flushThresh, blkSize),
 	}
 }
 
@@ -49,7 +49,7 @@ func (s *Server) Serve(storageAddr string) error {
 	// start gRPC server
 	svr := grpc.NewServer()
 	rpc.RegisterStorageServer(svr, s)
-	logger.Info("Storage server started | addr=%v | rootdir=%v", storageAddr, s.rootdir)
+	logger.Info("Storage server started | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
 	svr.Serve(listener)
 
 	return nil
