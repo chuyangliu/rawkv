@@ -74,7 +74,7 @@ func execGet(addr string, key string) {
 		panic(err)
 	}
 
-	fmt.Printf("Found=%v\nValue=\"%v\"\n", resp.Found, string(resp.Val))
+	fmt.Printf("Value=\"%v\"\nFound=%v\n", string(resp.Val), resp.Found)
 }
 
 func execPut(addr string, key string, val string) {
