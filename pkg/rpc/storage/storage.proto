@@ -1,5 +1,5 @@
 syntax = "proto3";
-package rpc;
+package storage;
 
 service Storage {
     // Get returns the value associated with the key, and a boolean indicating whether the key exists.

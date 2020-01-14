@@ -10,7 +10,7 @@ import (
 
 	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/node/shardmgr"
-	"github.com/chuyangliu/rawkv/pkg/rpc"
+	"github.com/chuyangliu/rawkv/pkg/rpc/storage"
 	"github.com/chuyangliu/rawkv/pkg/store"
 )
 
@@ -48,7 +48,7 @@ func (s *Server) Serve(storageAddr string) error {
 
 	// start gRPC server
 	svr := grpc.NewServer()
-	rpc.RegisterStorageServer(svr, s)
+	storage.RegisterStorageServer(svr, s)
 	logger.Info("Storage server started | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
 	svr.Serve(listener)
 
@@ -56,26 +56,26 @@ func (s *Server) Serve(storageAddr string) error {
 }
 
 // --------------------------------
-// rpc.StorageServer implementation
+// storage.StorageServer implementation
 // --------------------------------
 
 // Get returns the value associated with the key, and a boolean indicating whether the key exists.
-func (s *Server) Get(ctx context.Context, req *rpc.GetReq) (*rpc.GetResp, error) {
+func (s *Server) Get(ctx context.Context, req *storage.GetReq) (*storage.GetResp, error) {
 	val, found, err := s.mgr.Get(store.Key(req.Key))
-	resp := &rpc.GetResp{Val: []byte(val), Found: found}
+	resp := &storage.GetResp{Val: []byte(val), Found: found}
 	return resp, err
 }
 
 // Put adds or updates a key-value pair to the storage.
-func (s *Server) Put(ctx context.Context, req *rpc.PutReq) (*rpc.PutResp, error) {
+func (s *Server) Put(ctx context.Context, req *storage.PutReq) (*storage.PutResp, error) {
 	err := s.mgr.Put(store.Key(req.Key), store.Value(req.Val))
-	resp := &rpc.PutResp{}
+	resp := &storage.PutResp{}
 	return resp, err
 }
 
 // Del removes key from the storage.
-func (s *Server) Del(ctx context.Context, req *rpc.DelReq) (*rpc.DelResp, error) {
+func (s *Server) Del(ctx context.Context, req *storage.DelReq) (*storage.DelResp, error) {
 	err := s.mgr.Del(store.Key(req.Key))
-	resp := &rpc.DelResp{}
+	resp := &storage.DelResp{}
 	return resp, err
 }
