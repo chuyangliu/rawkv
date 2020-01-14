@@ -4,7 +4,7 @@ import (
 	"flag"
 
 	"github.com/chuyangliu/rawkv/pkg/logging"
-	"github.com/chuyangliu/rawkv/pkg/node/server"
+	"github.com/chuyangliu/rawkv/pkg/server"
 	"github.com/chuyangliu/rawkv/pkg/store"
 )
 

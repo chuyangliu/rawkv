@@ -12,7 +12,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/chuyangliu/rawkv/pkg/rpc/storage"
+	"github.com/chuyangliu/rawkv/pkg/server/pb"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	"github.com/stretchr/testify/assert"
 )
@@ -50,7 +50,7 @@ func TestBasic(t *testing.T) {
 		panic(nil)
 	}
 	defer conn.Close()
-	client := storage.NewStorageClient(conn)
+	client := pb.NewStorageClient(conn)
 
 	// create data
 	data := make([]string, max)
@@ -61,7 +61,7 @@ func TestBasic(t *testing.T) {
 
 	// put
 	for _, v := range data {
-		req := &storage.PutReq{Key: []byte(v), Val: []byte(v)}
+		req := &pb.PutReq{Key: []byte(v), Val: []byte(v)}
 		if _, err := client.Put(context.Background(), req); !assert.NoError(t, err) {
 			panic(nil)
 		}
@@ -69,7 +69,7 @@ func TestBasic(t *testing.T) {
 
 	// get
 	for _, v := range data {
-		req := &storage.GetReq{Key: []byte(v)}
+		req := &pb.GetReq{Key: []byte(v)}
 		resp, err := client.Get(context.Background(), req)
 		if !assert.NoError(t, err) || !assert.True(t, resp.Found) || !assert.Equal(t, []byte(v), resp.Val) {
 			panic(nil)
@@ -78,7 +78,7 @@ func TestBasic(t *testing.T) {
 
 	// del
 	for _, v := range data {
-		req := &storage.DelReq{Key: []byte(v)}
+		req := &pb.DelReq{Key: []byte(v)}
 		if _, err := client.Del(context.Background(), req); !assert.NoError(t, err) {
 			panic(nil)
 		}
@@ -86,7 +86,7 @@ func TestBasic(t *testing.T) {
 
 	// get
 	for _, v := range data {
-		req := &storage.GetReq{Key: []byte(v)}
+		req := &pb.GetReq{Key: []byte(v)}
 		resp, err := client.Get(context.Background(), req)
 		if !assert.NoError(t, err) || !assert.False(t, resp.Found) {
 			panic(nil)
@@ -117,7 +117,7 @@ func TestConcurrency(t *testing.T) {
 		panic(nil)
 	}
 	defer conn.Close()
-	client := storage.NewStorageClient(conn)
+	client := pb.NewStorageClient(conn)
 
 	// create data
 	data := make([]string, max)
@@ -170,28 +170,28 @@ func TestConcurrency(t *testing.T) {
 	}
 }
 
-func putData(c storage.StorageClient, data []string, results chan putDelResult) {
+func putData(c pb.StorageClient, data []string, results chan putDelResult) {
 	sleepRand()
 	for _, v := range data {
-		req := &storage.PutReq{Key: []byte(v), Val: []byte(v)}
+		req := &pb.PutReq{Key: []byte(v), Val: []byte(v)}
 		_, err := c.Put(context.Background(), req)
 		results <- putDelResult{key: store.Key(v), err: err}
 	}
 }
 
-func delData(c storage.StorageClient, data []string, results chan putDelResult) {
+func delData(c pb.StorageClient, data []string, results chan putDelResult) {
 	sleepRand()
 	for _, v := range data {
-		req := &storage.DelReq{Key: []byte(v)}
+		req := &pb.DelReq{Key: []byte(v)}
 		_, err := c.Del(context.Background(), req)
 		results <- putDelResult{key: store.Key(v), err: err}
 	}
 }
 
-func checkDataExist(c storage.StorageClient, data []string, results chan checkExistResult) {
+func checkDataExist(c pb.StorageClient, data []string, results chan checkExistResult) {
 	sleepRand()
 	for _, v := range data {
-		req := &storage.GetReq{Key: []byte(v)}
+		req := &pb.GetReq{Key: []byte(v)}
 		resp, err := c.Get(context.Background(), req)
 		results <- checkExistResult{
 			key:   store.Key(v),
