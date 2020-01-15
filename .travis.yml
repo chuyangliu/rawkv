@@ -1,0 +1,15 @@
+language: go
+
+os:
+  - linux
+
+branches:
+  only:
+    - master
+    - /^(dev)|(dev_.*)$/
+
+go:
+  - "1.13"
+
+script:
+  - go test -count=1 -v ./pkg/...
