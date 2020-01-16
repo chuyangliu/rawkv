@@ -12,6 +12,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/server/pb"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	"github.com/stretchr/testify/assert"
@@ -36,7 +37,7 @@ func TestBasic(t *testing.T) {
 	blkSize := store.KVLen(1024 * 2)
 
 	// start server
-	svr := New(rootdir, flushThresh, blkSize)
+	svr := New(rootdir, flushThresh, blkSize, logging.LevelInfo)
 	go func() {
 		if err := svr.Serve(storageAddr); !assert.NoError(t, err) {
 			panic(err)
@@ -103,7 +104,7 @@ func TestConcurrency(t *testing.T) {
 	blkSize := store.KVLen(1024 * 2)
 
 	// start server
-	svr := New(rootdir, flushThresh, blkSize)
+	svr := New(rootdir, flushThresh, blkSize, logging.LevelInfo)
 	go func() {
 		if err := svr.Serve(storageAddr); !assert.NoError(t, err) {
 			panic(err)

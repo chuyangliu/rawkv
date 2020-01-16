@@ -13,16 +13,13 @@ import (
 	"github.com/chuyangliu/rawkv/pkg/store/memstore"
 )
 
-var (
-	logger = logging.New(logging.LevelInfo)
-)
-
 // Store persists key-value data as an immutable file on disk.
 type Store struct {
-	path string          // path to store file
-	mem  *memstore.Store // read-only, reset to nil after flushed
-	idx  *blockIndex     // index to locate blocks in store file
-	lock sync.RWMutex
+	path   string          // path to store file
+	mem    *memstore.Store // read-only, reset to nil after flushed
+	idx    *blockIndex     // index to locate blocks in store file
+	lock   sync.RWMutex
+	logger logging.Logger
 }
 
 // New instantiates a FileStore.
@@ -73,7 +70,7 @@ func (s *Store) Get(key store.Key) (*store.Entry, error) {
 func (s *Store) BeginFlush(blkSize store.KVLen) {
 	go func() {
 		if err := s.Flush(blkSize); err != nil {
-			logger.Error("Background flush failed | path=%v | err=[%w]", s.path, err)
+			s.logger.Error("Background flush failed | path=%v | err=[%w]", s.path, err)
 		}
 	}()
 }

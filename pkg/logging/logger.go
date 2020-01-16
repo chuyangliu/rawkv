@@ -8,10 +8,10 @@ import (
 
 // Candidate values for logging level.
 const (
-	LevelDebug = iota
-	LevelInfo  = iota
-	LevelWarn  = iota
-	LevelError = iota
+	LevelDebug = 0
+	LevelInfo  = 1
+	LevelWarn  = 2
+	LevelError = 3
 )
 
 // Logger formats and writes log messages.
