@@ -1,0 +1,52 @@
+# Apply: kubectl apply -f kubernetes/rawkv.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rawkv-service
+spec:
+  type: NodePort
+  ports:
+  - name: server
+    port: 3668
+  selector:
+    app: rawkv
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rawkv-service-headless
+spec:
+  selector:
+    app: rawkv
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rawkv
+spec:
+  serviceName: rawkv-service-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rawkv
+  template:
+    metadata:
+      labels:
+        app: rawkv
+    spec:
+      containers:
+      - name: rawkvsvr
+        image: rawkvsvr:0.1.0
+        imagePullPolicy: Never  # use image from local docker registry
+        command:
+        - sh
+        - -c
+        args:
+        - "$GOPATH/bin/rawkvsvr \
+          -storageaddr :3668 \
+          -rootdir ./server-root \
+          -flushthresh 33554432 \
+          -blocksize 262144 \
+          -loglevel 0 \
+          "
