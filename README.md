@@ -1,4 +1,6 @@
-# RawKV  [![][badge-travis]][build-travis]
+# RawKV
+
+[![][travis-badge]][travis] [![][goreport-badge]][goreport]
 
 Cloud-native distributed key-value database.
 
@@ -6,5 +8,8 @@ Cloud-native distributed key-value database.
 
 See the [LICENSE](./LICENSE.md) file for license rights and limitations.
 
-[build-travis]: https://travis-ci.org/chuyangliu/rawkv
-[badge-travis]: https://travis-ci.org/chuyangliu/rawkv.svg?branch=master
+[travis]: https://travis-ci.org/chuyangliu/rawkv
+[travis-badge]: https://travis-ci.org/chuyangliu/rawkv.svg?branch=master
+
+[goreport]: https://goreportcard.com/report/github.com/chuyangliu/rawkv
+[goreport-badge]: https://goreportcard.com/badge/github.com/chuyangliu/rawkv
