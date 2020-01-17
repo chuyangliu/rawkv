@@ -1,5 +1,4 @@
 // Compile: protoc -I pkg --go_out=plugins=grpc:pkg pkg\server\pb\storage.proto
-
 syntax = "proto3";
 option go_package = "pb";
 

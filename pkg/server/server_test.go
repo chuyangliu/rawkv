@@ -32,6 +32,7 @@ type checkExistResult struct {
 func TestBasic(t *testing.T) {
 	max := 1000
 	storageAddr := "127.0.0.1:8000"
+	raftAddr := "127.0.0.1:8001"
 	rootdir := "./server.test"
 	flushThresh := store.KVLen(1024 * 10)
 	blkSize := store.KVLen(1024 * 2)
@@ -39,7 +40,7 @@ func TestBasic(t *testing.T) {
 	// start server
 	svr := New(rootdir, flushThresh, blkSize, logging.LevelInfo)
 	go func() {
-		if err := svr.Serve(storageAddr); !assert.NoError(t, err) {
+		if err := svr.Serve(storageAddr, raftAddr); !assert.NoError(t, err) {
 			panic(err)
 		}
 	}()
@@ -98,7 +99,8 @@ func TestBasic(t *testing.T) {
 func TestConcurrency(t *testing.T) {
 	max := 1000
 	step := 100
-	storageAddr := "127.0.0.1:8001"
+	storageAddr := "127.0.0.1:8002"
+	raftAddr := "127.0.0.1:8003"
 	rootdir := "./server.test"
 	flushThresh := store.KVLen(1024 * 10)
 	blkSize := store.KVLen(1024 * 2)
@@ -106,7 +108,7 @@ func TestConcurrency(t *testing.T) {
 	// start server
 	svr := New(rootdir, flushThresh, blkSize, logging.LevelInfo)
 	go func() {
-		if err := svr.Serve(storageAddr); !assert.NoError(t, err) {
+		if err := svr.Serve(storageAddr, raftAddr); !assert.NoError(t, err) {
 			panic(err)
 		}
 	}()

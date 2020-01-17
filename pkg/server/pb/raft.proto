@@ -1,0 +1,22 @@
+// Compile: protoc -I pkg --go_out=plugins=grpc:pkg pkg\server\pb\raft.proto
+syntax = "proto3";
+option go_package = "pb";
+
+service Raft {
+    // RequestVote invoked by candidates to gather votes
+    rpc RequestVote(RequestVoteReq) returns (RequestVoteResp) {}
+    // AppendEntries invoked by leader to replicate log entries, also used as heartbeat.
+    rpc AppendEntries(AppendEntriesReq) returns (AppendEntriesResp) {}
+}
+
+message RequestVoteReq {
+}
+
+message RequestVoteResp {
+}
+
+message AppendEntriesReq {
+}
+
+message AppendEntriesResp {
+}

@@ -31,7 +31,7 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, level int
 }
 
 // Serve runs the server instance and start handling incoming requests.
-func (s *Server) Serve(storageAddr string) error {
+func (s *Server) Serve(storageAddr string, raftAddr string) error {
 
 	// create root directory
 	if err := os.MkdirAll(s.rootdir, 0777); err != nil {
@@ -39,16 +39,34 @@ func (s *Server) Serve(storageAddr string) error {
 	}
 
 	// create listener for storage server
-	listener, err := net.Listen("tcp", storageAddr)
+	storageListener, err := net.Listen("tcp", storageAddr)
 	if err != nil {
 		return fmt.Errorf("Storage server listen failed | addr=%v | err=[%w]", storageAddr, err)
 	}
 
-	// start gRPC server
-	svr := grpc.NewServer()
-	pb.RegisterStorageServer(svr, s)
-	s.logger.Info("Storage server started | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
-	svr.Serve(listener)
+	// start storage server
+	storageSvr := grpc.NewServer()
+	pb.RegisterStorageServer(storageSvr, s)
+	go func() {
+		s.logger.Info("Starting storage server | addr=%v | rootdir=%v", storageListener.Addr().String(), s.rootdir)
+		if err := storageSvr.Serve(storageListener); err != nil {
+			s.logger.Error("Starting storage server failed | err=%v", err)
+		}
+	}()
+
+	// create listener for raft server
+	raftListener, err := net.Listen("tcp", raftAddr)
+	if err != nil {
+		return fmt.Errorf("Raft server listen failed | addr=%v | err=[%w]", storageAddr, err)
+	}
+
+	// start raft server
+	raftSvr := grpc.NewServer()
+	pb.RegisterRaftServer(raftSvr, s)
+	s.logger.Info("Starting raft server | addr=%v | rootdir=%v", raftListener.Addr().String(), s.rootdir)
+	if err := raftSvr.Serve(raftListener); err != nil {
+		s.logger.Error("Starting raft server failed | err=%v", err)
+	}
 
 	return nil
 }
@@ -79,4 +97,22 @@ func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	err := s.mgr.Del(store.Key(req.Key))
 	resp := &pb.DelResp{}
 	return resp, err
+}
+
+// --------------------------------
+// pb.RaftServer implementation
+// --------------------------------
+
+// RequestVote invoked by candidates to gather votes
+func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
+	s.logger.Debug("RequestVote")
+	resp := &pb.RequestVoteResp{}
+	return resp, nil
+}
+
+// AppendEntries invoked by leader to replicate log entries, also used as heartbeat.
+func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
+	s.logger.Debug("AppendEntries")
+	resp := &pb.AppendEntriesResp{}
+	return resp, nil
 }
