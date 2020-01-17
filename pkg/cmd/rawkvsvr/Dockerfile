@@ -4,4 +4,4 @@ FROM golang:1.13.2
 WORKDIR /rawkvsvr
 COPY . .
 RUN go install ./pkg/cmd/rawkvsvr
-CMD $GOPATH/bin/rawkvsvr -storageaddr :8000
+CMD $GOPATH/bin/rawkvsvr -storageaddr :8000 -raftaddr :8001 -loglevel 1

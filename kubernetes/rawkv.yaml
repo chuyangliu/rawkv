@@ -7,7 +7,7 @@ spec:
   type: NodePort
   ports:
   - name: server
-    port: 3668
+    port: 3600
   selector:
     app: rawkv
 ---
@@ -35,9 +35,7 @@ spec:
         - -c
         args:
         - "$GOPATH/bin/rawkvsvr \
-          -storageaddr :3668 \
-          -rootdir ./server-root \
-          -flushthresh 33554432 \
-          -blocksize 262144 \
+          -storageaddr :3600 \
+          -raftaddr :3601 \
           -loglevel 0 \
           "
