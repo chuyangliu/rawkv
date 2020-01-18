@@ -103,7 +103,7 @@ func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 // pb.RaftServer implementation
 // --------------------------------
 
-// RequestVote invoked by candidates to gather votes
+// RequestVote invoked by candidates to gather votes.
 func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
 	s.logger.Debug("RequestVote")
 	resp := &pb.RequestVoteResp{}

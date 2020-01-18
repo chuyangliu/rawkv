@@ -183,7 +183,7 @@ const _ = grpc.SupportPackageIsVersion4
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type RaftClient interface {
-	// RequestVote invoked by candidates to gather votes
+	// RequestVote invoked by candidates to gather votes.
 	RequestVote(ctx context.Context, in *RequestVoteReq, opts ...grpc.CallOption) (*RequestVoteResp, error)
 	// AppendEntries invoked by leader to replicate log entries, also used as heartbeat.
 	AppendEntries(ctx context.Context, in *AppendEntriesReq, opts ...grpc.CallOption) (*AppendEntriesResp, error)
@@ -217,7 +217,7 @@ func (c *raftClient) AppendEntries(ctx context.Context, in *AppendEntriesReq, op
 
 // RaftServer is the server API for Raft service.
 type RaftServer interface {
-	// RequestVote invoked by candidates to gather votes
+	// RequestVote invoked by candidates to gather votes.
 	RequestVote(context.Context, *RequestVoteReq) (*RequestVoteResp, error)
 	// AppendEntries invoked by leader to replicate log entries, also used as heartbeat.
 	AppendEntries(context.Context, *AppendEntriesReq) (*AppendEntriesResp, error)
