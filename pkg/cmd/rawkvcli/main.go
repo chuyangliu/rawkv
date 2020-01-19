@@ -19,16 +19,16 @@ func main() {
 	}
 
 	getCmd := flag.NewFlagSet("get", flag.ExitOnError)
-	getAddr := getCmd.String("addr", "127.0.0.1:8000", "Server address to connect.")
+	getAddr := getCmd.String("addr", "127.0.0.1:5640", "Server address to connect.")
 	getKey := getCmd.String("key", "", "Key to get.")
 
 	putCmd := flag.NewFlagSet("put", flag.ExitOnError)
-	putAddr := putCmd.String("addr", "127.0.0.1:8000", "Server address to connect.")
+	putAddr := putCmd.String("addr", "127.0.0.1:5640", "Server address to connect.")
 	putKey := putCmd.String("key", "", "Key to put.")
 	putVal := putCmd.String("val", "", "Value to put.")
 
 	delCmd := flag.NewFlagSet("del", flag.ExitOnError)
-	delAddr := delCmd.String("addr", "127.0.0.1:8000", "Server address to connect.")
+	delAddr := delCmd.String("addr", "127.0.0.1:5640", "Server address to connect.")
 	delKey := delCmd.String("key", "", "Key to delete.")
 
 	switch os.Args[1] {

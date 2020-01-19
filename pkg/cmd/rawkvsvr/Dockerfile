@@ -1,7 +1,7 @@
-# Build: docker image build -t rawkvsvr:0.1.0 -f ./pkg/cmd/rawkvsvr/Dockerfile .
-# Run: docker container run --publish 8000:8000 --detach --name rawkvsvr rawkvsvr:0.1.0
+# Build: docker build -t rawkvsvr:latest -f ./pkg/cmd/rawkvsvr/Dockerfile .
+# Run: docker container run --publish 5640:5640 --detach --name rawkvsvr rawkvsvr:latest
 FROM golang:1.13.2
 WORKDIR /rawkvsvr
 COPY . .
 RUN go install ./pkg/cmd/rawkvsvr
-CMD $GOPATH/bin/rawkvsvr -storageaddr :8000 -raftaddr :8001 -loglevel 1
+CMD $GOPATH/bin/rawkvsvr -storageaddr :5640 -raftaddr :5641 -loglevel 1

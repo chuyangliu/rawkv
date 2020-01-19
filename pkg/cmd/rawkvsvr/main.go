@@ -8,8 +8,8 @@ import (
 )
 
 func main() {
-	storageAddr := flag.String("storageaddr", "127.0.0.1:8000", "Address for storage server to listen.")
-	raftAddr := flag.String("raftaddr", "127.0.0.1:8001", "Address for raft server to listen.")
+	storageAddr := flag.String("storageaddr", "127.0.0.1:5640", "Address for storage server to listen.")
+	raftAddr := flag.String("raftaddr", "127.0.0.1:5641", "Address for raft server to listen.")
 	rootdir := flag.String("rootdir", "./rawkv-root", "Root directory to persist data.")
 	flushThresh := flag.Uint64("flushthresh", uint64(1)<<25, "Threshold in bytes to flush MemStore.")
 	blkSize := flag.Uint64("blocksize", uint64(1)<<18, "Block size in bytes to persist FileStore.")

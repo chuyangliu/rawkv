@@ -11,5 +11,10 @@ branches:
 go:
   - "1.13"
 
+services:
+  - docker
+
 script:
   - go test -count=1 -v ./pkg/...
+  - go install .\pkg\...
+  - docker build -t rawkvsvr:latest -f ./pkg/cmd/rawkvsvr/Dockerfile .
