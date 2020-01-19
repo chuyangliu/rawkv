@@ -78,9 +78,9 @@ func (s *Server) Serve(storageAddr string, raftAddr string) error {
 	return nil
 }
 
-// --------------------------------
-// pb.StorageServer implementation
-// --------------------------------
+// -------------------------------
+// pb.StorageServer Implementation
+// -------------------------------
 
 // Get returns the value associated with the key, and a boolean indicating whether the key exists.
 func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
@@ -106,9 +106,9 @@ func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	return resp, err
 }
 
-// --------------------------------
-// pb.RaftServer implementation
-// --------------------------------
+// ----------------------------
+// pb.RaftServer Implementation
+// ----------------------------
 
 // RequestVote invoked by candidates to gather votes.
 func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {

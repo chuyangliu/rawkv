@@ -85,9 +85,9 @@ func NewK8SNodeProvider(logLevel int) (*K8SNodeProvider, error) {
 	}, nil
 }
 
-// ---------------------------------
-// NodeProvider Implementation Start
-// ---------------------------------
+// ---------------------------
+// NodeProvider Implementation
+// ---------------------------
 
 // Index returns the index of current node.
 func (p *K8SNodeProvider) Index() (int, error) {
@@ -103,10 +103,6 @@ func (p *K8SNodeProvider) RaftAddr(index int) (string, error) {
 func (p *K8SNodeProvider) Size() (int, error) {
 	return -1, nil
 }
-
-// ---------------------------------
-// NodeProvider Implementation End
-// ---------------------------------
 
 func getClusterDomain() (string, error) {
 	return "cluster.local", nil
