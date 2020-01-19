@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"sort"
 	"strconv"
 	"testing"
@@ -37,8 +38,16 @@ func TestBasic(t *testing.T) {
 	flushThresh := store.KVLen(1024 * 10)
 	blkSize := store.KVLen(1024 * 2)
 
+	// set envs
+	if err := setK8SEnvs(); !assert.NoError(t, err) {
+		panic(err)
+	}
+
 	// start server
-	svr := New(rootdir, flushThresh, blkSize, logging.LevelInfo)
+	svr, err := New(rootdir, flushThresh, blkSize, logging.LevelInfo)
+	if !assert.NoError(t, err) {
+		panic(err)
+	}
 	go func() {
 		if err := svr.Serve(storageAddr, raftAddr); !assert.NoError(t, err) {
 			panic(err)
@@ -105,8 +114,16 @@ func TestConcurrency(t *testing.T) {
 	flushThresh := store.KVLen(1024 * 10)
 	blkSize := store.KVLen(1024 * 2)
 
+	// set envs
+	if err := setK8SEnvs(); !assert.NoError(t, err) {
+		panic(err)
+	}
+
 	// start server
-	svr := New(rootdir, flushThresh, blkSize, logging.LevelInfo)
+	svr, err := New(rootdir, flushThresh, blkSize, logging.LevelInfo)
+	if !assert.NoError(t, err) {
+		panic(err)
+	}
 	go func() {
 		if err := svr.Serve(storageAddr, raftAddr); !assert.NoError(t, err) {
 			panic(err)
@@ -171,6 +188,22 @@ func TestConcurrency(t *testing.T) {
 			panic(fmt.Sprintf("Del %v failed", result.key))
 		}
 	}
+}
+
+func setK8SEnvs() error {
+	if err := os.Setenv("RAWKV_POD_NAME", "rawkv-0"); err != nil {
+		return err
+	}
+	if err := os.Setenv("RAWKV_SERVICE_NAME", "rawkv-svc"); err != nil {
+		return err
+	}
+	if err := os.Setenv("RAWKV_NAMESPACE", "rawkv-ns"); err != nil {
+		return err
+	}
+	if err := os.Setenv("RAWKV_RAFT_PORT", "5641"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func putData(c pb.StorageClient, data []string, results chan putDelResult) {

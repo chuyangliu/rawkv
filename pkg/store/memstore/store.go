@@ -4,21 +4,24 @@ import (
 	"sync"
 
 	"github.com/chuyangliu/rawkv/pkg/algods/treemap"
+	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/store"
 )
 
 // Store stores key-value data in memory.
 type Store struct {
-	data *treemap.Map // map key to store.Entry
-	size store.KVLen  // number of bytes occupied by data
-	lock sync.RWMutex
+	data   *treemap.Map // map key to store.Entry
+	size   store.KVLen  // number of bytes occupied by data
+	lock   sync.RWMutex
+	logger *logging.Logger
 }
 
 // New instantiates an empty MemStore.
-func New() *Store {
+func New(logLevel int) *Store {
 	return &Store{
-		data: treemap.New(store.KeyCmp),
-		size: 0,
+		data:   treemap.New(store.KeyCmp),
+		size:   0,
+		logger: logging.New(logLevel),
 	}
 }
 

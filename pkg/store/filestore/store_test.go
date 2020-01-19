@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	"github.com/chuyangliu/rawkv/pkg/store/memstore"
 	"github.com/stretchr/testify/assert"
@@ -32,13 +33,13 @@ func TestBasic(t *testing.T) {
 	sort.Strings(data)
 
 	// create MemStore
-	ms := memstore.New()
+	ms := memstore.New(logging.LevelDebug)
 	for _, v := range data {
 		ms.Put(store.Key(v), store.Value(v))
 	}
 
 	// create FileStore from MemStore
-	fs, err := New(path, ms)
+	fs, err := New(path, ms, logging.LevelDebug)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
@@ -75,7 +76,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	// create FileStore from disk
-	fs, err = New(path, nil)
+	fs, err = New(path, nil, logging.LevelDebug)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
@@ -108,13 +109,13 @@ func TestConcurrency(t *testing.T) {
 	sort.Strings(data)
 
 	// create MemStore
-	ms := memstore.New()
+	ms := memstore.New(logging.LevelDebug)
 	for _, v := range data {
 		ms.Put(store.Key(v), store.Value(v))
 	}
 
 	// create FileStore from MemStore
-	fs, err := New(path, ms)
+	fs, err := New(path, ms, logging.LevelDebug)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
@@ -139,7 +140,7 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// create FileStore from disk
-	fs, err = New(path, nil)
+	fs, err = New(path, nil, logging.LevelDebug)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}

@@ -2,40 +2,68 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: rawkv
+  name: rawkv-lb
+  namespace: rawkv
 spec:
   type: NodePort
   ports:
   - name: server
-    port: 3600
+    port: 8000
+    targetPort: 5640
   selector:
     app: rawkv
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rawkv-hl
+  namespace: rawkv
+spec:
+  selector:
+    app: rawkv
+  clusterIP: None
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: rawkv
+  namespace: rawkv
 spec:
-  serviceName: rawkv
+  serviceName: rawkv-hl
   replicas: 2
   selector:
     matchLabels:
       app: rawkv
+  podManagementPolicy: Parallel
   template:
     metadata:
+      namespace: rawkv
       labels:
         app: rawkv
     spec:
       containers:
       - name: rawkvsvr
-        image: rawkvsvr:0.1.0
+        image: rawkvsvr:latest
         imagePullPolicy: Never  # use image from local docker registry
+        env:
+        - name: RAWKV_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: RAWKV_SERVICE_NAME
+          value: rawkv-hl
+        - name: RAWKV_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: RAWKV_RAFT_PORT
+          value: "5641"
         command:
         - sh
         - -c
         args:
         - "$GOPATH/bin/rawkvsvr \
-          -storageaddr :3600 \
-          -raftaddr :3601 \
+          -storageaddr :5640 \
+          -raftaddr :5641 \
           -loglevel 0 \
           "

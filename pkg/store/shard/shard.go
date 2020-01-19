@@ -5,6 +5,7 @@ import (
 	"path"
 	"sync"
 
+	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	"github.com/chuyangliu/rawkv/pkg/store/filestore"
 	"github.com/chuyangliu/rawkv/pkg/store/memstore"
@@ -18,16 +19,18 @@ type Shard struct {
 	mem         *memstore.Store    // single MemStore
 	files       []*filestore.Store // multiple FileStores from oldest to newest
 	lock        sync.RWMutex
+	logger      *logging.Logger
 }
 
 // New instantiates an empty Shard.
-func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Shard {
+func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel int) *Shard {
 	return &Shard{
 		rootdir:     rootdir,
 		flushThresh: flushThresh,
 		blkSize:     blkSize,
-		mem:         memstore.New(),
+		mem:         memstore.New(logLevel),
 		files:       make([]*filestore.Store, 0),
+		logger:      logging.New(logLevel),
 	}
 }
 
@@ -82,13 +85,13 @@ func (s *Shard) Del(key store.Key) error {
 
 func (s *Shard) flush() error {
 	filePath := s.nextFilePath()
-	fs, err := filestore.New(filePath, s.mem)
+	fs, err := filestore.New(filePath, s.mem, s.logger.Level())
 	if err != nil {
 		return fmt.Errorf("Create FileStore failed | path=%v | err=[%w]", filePath, err)
 	}
 	fs.BeginFlush(s.blkSize)
 	s.files = append(s.files, fs)
-	s.mem = memstore.New()
+	s.mem = memstore.New(s.logger.Level())
 	return nil
 }
 

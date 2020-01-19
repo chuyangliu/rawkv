@@ -19,17 +19,18 @@ type Store struct {
 	mem    *memstore.Store // read-only, reset to nil after flushed
 	idx    *blockIndex     // index to locate blocks in store file
 	lock   sync.RWMutex
-	logger logging.Logger
+	logger *logging.Logger
 }
 
 // New instantiates a FileStore.
 // If ms is nil, the FileStore is backed by store file on disk.
 // Otherwise, ms will be used to back FileStore and can be flushed to store file.
-func New(path string, ms *memstore.Store) (*Store, error) {
+func New(path string, ms *memstore.Store, logLevel int) (*Store, error) {
 	s := &Store{
-		path: path,
-		mem:  ms,
-		idx:  nil,
+		path:   path,
+		mem:    ms,
+		idx:    nil,
+		logger: logging.New(logLevel),
 	}
 	if ms == nil { // back by store file
 		idx, err := readBlockIndex(path)

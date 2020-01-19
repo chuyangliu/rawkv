@@ -28,6 +28,11 @@ func New(level int) *Logger {
 	}
 }
 
+// Level returns the log level.
+func (l *Logger) Level() int {
+	return l.level
+}
+
 // Debug writes formatted log with debug messages.
 func (l *Logger) Debug(format string, operands ...interface{}) {
 	if l.level <= LevelDebug {

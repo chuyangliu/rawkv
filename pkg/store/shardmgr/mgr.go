@@ -1,6 +1,7 @@
 package shardmgr
 
 import (
+	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	sd "github.com/chuyangliu/rawkv/pkg/store/shard"
 )
@@ -9,12 +10,14 @@ import (
 // Currently only a single shard is managed as shard split hasn't been implemented.
 type Manager struct {
 	shards []*sd.Shard
+	logger *logging.Logger
 }
 
 // New instantiates a new Manager.
-func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen) *Manager {
+func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel int) *Manager {
 	return &Manager{
-		shards: []*sd.Shard{sd.New(rootdir, flushThresh, blkSize)},
+		shards: []*sd.Shard{sd.New(rootdir, flushThresh, blkSize, logLevel)},
+		logger: logging.New(logLevel),
 	}
 }
 

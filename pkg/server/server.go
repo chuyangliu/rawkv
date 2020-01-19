@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/server/pb"
 	"github.com/chuyangliu/rawkv/pkg/store"
@@ -16,18 +17,24 @@ import (
 
 // Server manages the server running on node.
 type Server struct {
-	rootdir string
-	mgr     *shardmgr.Manager
-	logger  *logging.Logger
+	rootdir      string
+	mgr          *shardmgr.Manager
+	nodeProvider cluster.NodeProvider
+	logger       *logging.Logger
 }
 
 // New instantiates a Server.
-func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, level int) *Server {
-	return &Server{
-		rootdir: rootdir,
-		mgr:     shardmgr.New(rootdir, flushThresh, blkSize),
-		logger:  logging.New(level),
+func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel int) (*Server, error) {
+	nodeProvider, err := cluster.NewK8SNodeProvider(logLevel)
+	if err != nil {
+		return nil, fmt.Errorf("Create Kubernetes node provider failed | err=[%w]", err)
 	}
+	return &Server{
+		rootdir:      rootdir,
+		mgr:          shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
+		nodeProvider: nodeProvider,
+		logger:       logging.New(logLevel),
+	}, nil
 }
 
 // Serve runs the server instance and start handling incoming requests.

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	"github.com/stretchr/testify/assert"
 )
@@ -30,7 +31,7 @@ func TestBasic(t *testing.T) {
 	}
 	sort.Strings(data)
 
-	s := New()
+	s := New(logging.LevelDebug)
 
 	// put
 	for _, v := range data {
@@ -119,7 +120,7 @@ func TestConcurrency(t *testing.T) {
 	}
 	sort.Strings(data)
 
-	s := New()
+	s := New(logging.LevelDebug)
 
 	// put
 	finishes := make(chan bool, numWorkers)
