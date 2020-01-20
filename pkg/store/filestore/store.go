@@ -71,7 +71,7 @@ func (s *Store) Get(key store.Key) (*store.Entry, error) {
 func (s *Store) BeginFlush(blkSize store.KVLen) {
 	go func() {
 		if err := s.Flush(blkSize); err != nil {
-			s.logger.Error("Background flush failed | path=%v | err=[%w]", s.path, err)
+			s.logger.Error("Background flush failed | path=%v | err=[%v]", s.path, err)
 		}
 	}()
 }

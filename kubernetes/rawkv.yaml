@@ -30,7 +30,7 @@ metadata:
   namespace: rawkv
 spec:
   serviceName: rawkv-hl
-  replicas: 2
+  replicas: 3
   selector:
     matchLabels:
       app: rawkv

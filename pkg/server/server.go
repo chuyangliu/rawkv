@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -25,10 +26,19 @@ type Server struct {
 
 // New instantiates a Server.
 func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel int) (*Server, error) {
+
+	// create root directory
+	if err := os.MkdirAll(rootdir, 0777); err != nil {
+		return nil, fmt.Errorf("Create root directory failed | rootdir=%v | err=[%w]", rootdir, err)
+	}
+
+	// create node provider
 	nodeProvider, err := cluster.NewK8SNodeProvider(logLevel)
 	if err != nil {
 		return nil, fmt.Errorf("Create Kubernetes node provider failed | err=[%w]", err)
 	}
+
+	// instantiate
 	return &Server{
 		rootdir:      rootdir,
 		mgr:          shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
@@ -39,42 +49,9 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel 
 
 // Serve runs the server instance and start handling incoming requests.
 func (s *Server) Serve(storageAddr string, raftAddr string) error {
-
-	// create root directory
-	if err := os.MkdirAll(s.rootdir, 0777); err != nil {
-		return fmt.Errorf("Create root directory failed | rootdir=%v | err=[%w]", s.rootdir, err)
-	}
-
-	// create listener for storage server
-	storageListener, err := net.Listen("tcp", storageAddr)
-	if err != nil {
-		return fmt.Errorf("Storage server listen failed | addr=%v | err=[%w]", storageAddr, err)
-	}
-
-	// start storage server
-	storageSvr := grpc.NewServer()
-	pb.RegisterStorageServer(storageSvr, s)
-	go func() {
-		s.logger.Info("Starting storage server | addr=%v | rootdir=%v", storageListener.Addr().String(), s.rootdir)
-		if err := storageSvr.Serve(storageListener); err != nil {
-			s.logger.Error("Starting storage server failed | err=%v", err)
-		}
-	}()
-
-	// create listener for raft server
-	raftListener, err := net.Listen("tcp", raftAddr)
-	if err != nil {
-		return fmt.Errorf("Raft server listen failed | addr=%v | err=[%w]", storageAddr, err)
-	}
-
-	// start raft server
-	raftSvr := grpc.NewServer()
-	pb.RegisterRaftServer(raftSvr, s)
-	s.logger.Info("Starting raft server | addr=%v | rootdir=%v", raftListener.Addr().String(), s.rootdir)
-	if err := raftSvr.Serve(raftListener); err != nil {
-		s.logger.Error("Starting raft server failed | err=%v", err)
-	}
-
+	go s.serveStorage(storageAddr)
+	go s.serveRaft(raftAddr)
+	s.raftLoop()
 	return nil
 }
 
@@ -122,4 +99,80 @@ func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesReq) (*
 	s.logger.Debug("AppendEntries")
 	resp := &pb.AppendEntriesResp{}
 	return resp, nil
+}
+
+func (s *Server) serveStorage(addr string) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		s.logger.Error("Storage server listen failed | addr=%v | err=[%v]", addr, err)
+		return
+	}
+	svr := grpc.NewServer()
+	pb.RegisterStorageServer(svr, s)
+	s.logger.Info("Starting storage server | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
+	if err := svr.Serve(listener); err != nil {
+		s.logger.Error("Starting storage server failed | err=[%v]", err)
+	}
+}
+
+func (s *Server) serveRaft(addr string) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		s.logger.Error("Raft server listen failed | addr=%v | err=[%v]", addr, err)
+		return
+	}
+	svr := grpc.NewServer()
+	pb.RegisterRaftServer(svr, s)
+	s.logger.Info("Starting raft server | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
+	if err := svr.Serve(listener); err != nil {
+		s.logger.Error("Starting raft server failed | err=[%v]", err)
+	}
+}
+
+func (s *Server) raftLoop() {
+	for {
+		time.Sleep(time.Duration(3) * time.Second)
+
+		idx, err := s.nodeProvider.Index()
+		if err != nil || idx > 0 {
+			if err != nil {
+				s.logger.Error("Get current node index failed | err=[%v]", err)
+			}
+			continue
+		}
+
+		size, err := s.nodeProvider.Size()
+		if err != nil {
+			s.logger.Error("Get number of nodes failed | idx=%v | err=[%v]", idx, err)
+			continue
+		}
+
+		for i := 0; i < size; i++ {
+			if i == idx {
+				continue
+			}
+
+			addr, err := s.nodeProvider.RaftAddr(i)
+			if err != nil {
+				s.logger.Error("Get Raft server address failed | idx=%v | size=%v | err=[%v]", idx, size, err)
+				continue
+			}
+
+			conn, err := grpc.Dial(addr, grpc.WithInsecure())
+			if err != nil {
+				s.logger.Error("Connect Raft server failed | idx=%v | size=%v | addr=%v | err=[%v]",
+					idx, size, addr, err)
+				continue
+			}
+			defer conn.Close()
+			client := pb.NewRaftClient(conn)
+
+			req := &pb.AppendEntriesReq{}
+			if _, err := client.AppendEntries(context.Background(), req); err != nil {
+				s.logger.Error("Send Raft request failed | idx=%v | size=%v | addr=%v | err=[%v]",
+					idx, size, addr, err)
+				continue
+			}
+		}
+	}
 }
