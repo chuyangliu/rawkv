@@ -1,0 +1,43 @@
+// Compile: protoc --go_out=plugins=grpc:./pkg/pb pkg/pb/raft.proto
+syntax = "proto3";
+option go_package = "github.com/chuyangliu/rawkv/pkg/pb";
+
+service Raft {
+    // RequestVote invoked by raft candidates to gather votes.
+    rpc RequestVote(RequestVoteReq) returns (RequestVoteResp) {}
+    // AppendEntries invoked by raft leader to replicate log entries, also used as heartbeat.
+    rpc AppendEntries(AppendEntriesReq) returns (AppendEntriesResp) {}
+}
+
+message RequestVoteReq {
+    uint64 term = 1;         // Candidate's term.
+    int32 candidateID = 2;   // Node id of the candidate requesting vote.
+    uint64 lastLogIndex = 3; // Index of candidate's last log entry.
+    uint64 lastLogTerm = 4;  // Term of candidate's last log entry.
+}
+
+message RequestVoteResp {
+    uint64 term = 1;      // Receiver's currentTerm, for candidate to update itself.
+    bool voteGranted = 2; // True means candidate received vote, false otherwise.
+}
+
+message AppendEntriesReq {
+    message LogEntry {
+        uint64 index = 1; // Log index.
+        uint64 term = 2;  // Log term.
+        uint32 cmd = 3;   // Log command.
+        bytes key = 4;    // Key associated with log command.
+        bytes value = 5;  // Value associated with log command.
+    }
+    uint64 term = 1;               // Leader's term.
+    int32 leaderID = 2;            // Node id of the leader.
+    uint64 prevLogIndex = 3;       // Index of log entry immediately preceding new ones.
+    uint64 prevLogTerm = 4;        // Term of prevLogIndex entry.
+    repeated LogEntry entries = 5; // Log entries to store.
+    uint64 leaderCommit = 6;       // Leader's commitIndex.
+}
+
+message AppendEntriesResp {
+    uint64 term = 1;  // Receiver's currentTerm, for leader to update itself.
+    bool success = 2; // True means the operation succeeds, false otherwise.
+}
