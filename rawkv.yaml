@@ -1,0 +1,102 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default
+  name: pod-reader
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: default
+  name: pod-reader-binding
+subjects:
+- kind: ServiceAccount
+  namespace: default
+  name: default
+roleRef:
+  kind: Role
+  name: pod-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rawkv-lb
+spec:
+  type: NodePort
+  ports:
+  - name: server
+    port: 8000
+    targetPort: 5640
+  selector:
+    app: rawkv
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rawkv-backend
+spec:
+  selector:
+    app: rawkv
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rawkv
+spec:
+  serviceName: rawkv-backend
+  replicas: 3
+  selector:
+    matchLabels:
+      app: rawkv
+  podManagementPolicy: Parallel
+  template:
+    metadata:
+      labels:
+        app: rawkv
+    spec:
+      containers:
+      - name: rawkvsvr
+        image: rawkvsvr:latest
+        imagePullPolicy: Never  # use image from local docker registry
+        env:
+        - name: RAWKV_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: RAWKV_SERVICE_NAME
+          value: rawkv-backend
+        - name: RAWKV_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: RAWKV_STORAGE_PORT
+          value: "5640"
+        - name: RAWKV_RAFT_PORT
+          value: "5641"
+        command:
+        - sh
+        - -c
+        args:
+        - "$GOPATH/bin/rawkvsvr \
+          -storageaddr :5640 \
+          -raftaddr :5641 \
+          -rootdir /mnt/data
+          -loglevel 0 \
+          "
+        volumeMounts:
+          - name: data
+            mountPath: /mnt/data
+  volumeClaimTemplates:  # expect persistent volumes already provisioned
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 1Gi

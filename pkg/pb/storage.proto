@@ -1,0 +1,36 @@
+// Compile: protoc --go_out=plugins=grpc:./pkg/pb pkg/pb/storage.proto
+syntax = "proto3";
+option go_package = "github.com/chuyangliu/rawkv/pkg/pb";
+
+service Storage {
+    // Get returns the value associated with given key.
+    rpc Get(GetReq) returns (GetResp) {}
+    // Put adds or updates a key-value pair.
+    rpc Put(PutReq) returns (PutResp) {}
+    // Del removes a key-value pair.
+    rpc Del(DelReq) returns (DelResp) {}
+}
+
+message GetReq {
+    bytes key = 1;
+}
+
+message GetResp {
+    bytes value = 1;
+    bool found = 2;
+}
+
+message PutReq {
+    bytes key = 1;
+    bytes value = 2;
+}
+
+message PutResp {
+}
+
+message DelReq {
+    bytes key = 1;
+}
+
+message DelResp {
+}
