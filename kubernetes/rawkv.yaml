@@ -3,7 +3,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: rawkv-lb
-  namespace: rawkv
 spec:
   type: NodePort
   ports:
@@ -17,7 +16,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: rawkv-hl
-  namespace: rawkv
 spec:
   selector:
     app: rawkv
@@ -27,7 +25,6 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: rawkv
-  namespace: rawkv
 spec:
   serviceName: rawkv-hl
   replicas: 3
@@ -37,7 +34,6 @@ spec:
   podManagementPolicy: Parallel
   template:
     metadata:
-      namespace: rawkv
       labels:
         app: rawkv
     spec:
