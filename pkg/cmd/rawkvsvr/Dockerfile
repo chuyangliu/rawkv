@@ -1,5 +1,5 @@
-# Build: docker build -t rawkvsvr:latest -f ./pkg/cmd/rawkvsvr/Dockerfile .
-# Run: docker container run --publish 5640:5640 --detach --name rawkvsvr rawkvsvr:latest
+# docker build -t rawkvsvr:latest -f ./pkg/cmd/rawkvsvr/Dockerfile .
+# docker container run --publish 5640:5640 --detach --name rawkvsvr rawkvsvr:latest
 FROM golang:1.13.2
 WORKDIR /rawkvsvr
 COPY . .

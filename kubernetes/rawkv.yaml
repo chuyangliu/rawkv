@@ -1,4 +1,4 @@
-# Apply: kubectl apply -f kubernetes/rawkv.yaml
+# kubectl apply -f kubernetes/rawkv.yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -65,5 +65,17 @@ spec:
         - "$GOPATH/bin/rawkvsvr \
           -storageaddr :5640 \
           -raftaddr :5641 \
+          -rootdir /mnt/data
           -loglevel 0 \
           "
+        volumeMounts:
+          - name: data
+            mountPath: /mnt/data
+  volumeClaimTemplates:  # expect persistent volumes already provisioned
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 1Gi
