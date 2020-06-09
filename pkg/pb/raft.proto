@@ -1,6 +1,6 @@
-// Compile: protoc -I pkg --go_out=plugins=grpc:pkg pkg\server\pb\raft.proto
+// Compile: protoc --go_out=plugins=grpc:./pkg/pb pkg/pb/raft.proto
 syntax = "proto3";
-option go_package = "pb";
+option go_package = "github.com/chuyangliu/rawkv/pkg/pb";
 
 service Raft {
     // RequestVote invoked by candidates to gather votes.

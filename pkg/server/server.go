@@ -11,7 +11,7 @@ import (
 
 	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
-	"github.com/chuyangliu/rawkv/pkg/server/pb"
+	"github.com/chuyangliu/rawkv/pkg/pb"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	"github.com/chuyangliu/rawkv/pkg/store/shardmgr"
 )

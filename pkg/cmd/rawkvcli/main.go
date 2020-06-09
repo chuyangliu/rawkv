@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/chuyangliu/rawkv/pkg/server/pb"
+	"github.com/chuyangliu/rawkv/pkg/pb"
 )
 
 func main() {

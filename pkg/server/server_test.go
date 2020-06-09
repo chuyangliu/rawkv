@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/chuyangliu/rawkv/pkg/logging"
-	"github.com/chuyangliu/rawkv/pkg/server/pb"
+	"github.com/chuyangliu/rawkv/pkg/pb"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	"github.com/stretchr/testify/assert"
 )
