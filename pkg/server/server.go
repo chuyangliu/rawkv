@@ -19,7 +19,7 @@ import (
 // Server manages the server running on node.
 type Server struct {
 	rootdir      string
-	mgr          *shardmgr.Manager
+	shardMgr     *shardmgr.Manager
 	nodeProvider cluster.NodeProvider
 	logger       *logging.Logger
 }
@@ -41,7 +41,7 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel 
 	// instantiate
 	return &Server{
 		rootdir:      rootdir,
-		mgr:          shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
+		shardMgr:     shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
 		nodeProvider: nodeProvider,
 		logger:       logging.New(logLevel),
 	}, nil
@@ -62,7 +62,7 @@ func (s *Server) Serve(storageAddr string, raftAddr string) error {
 // Get returns the value associated with the key, and a boolean indicating whether the key exists.
 func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 	s.logger.Debug("Get | key=%v", store.Key(req.Key))
-	val, found, err := s.mgr.Get(store.Key(req.Key))
+	val, found, err := s.shardMgr.Get(store.Key(req.Key))
 	resp := &pb.GetResp{Val: []byte(val), Found: found}
 	return resp, err
 }
@@ -70,7 +70,7 @@ func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 // Put adds or updates a key-value pair to the storage.
 func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 	s.logger.Debug("Put | key=%v | val=%v", store.Key(req.Key), store.Value(req.Val))
-	err := s.mgr.Put(store.Key(req.Key), store.Value(req.Val))
+	err := s.shardMgr.Put(store.Key(req.Key), store.Value(req.Val))
 	resp := &pb.PutResp{}
 	return resp, err
 }
@@ -78,7 +78,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 // Del removes key from the storage.
 func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	s.logger.Debug("Del | key=%v", store.Key(req.Key))
-	err := s.mgr.Del(store.Key(req.Key))
+	err := s.shardMgr.Del(store.Key(req.Key))
 	resp := &pb.DelResp{}
 	return resp, err
 }
