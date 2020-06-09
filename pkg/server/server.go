@@ -5,23 +5,22 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"time"
 
 	"google.golang.org/grpc"
 
-	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/pb"
+	"github.com/chuyangliu/rawkv/pkg/raft"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	"github.com/chuyangliu/rawkv/pkg/store/shardmgr"
 )
 
 // Server manages the server running on node.
 type Server struct {
-	rootdir      string
-	shardMgr     *shardmgr.Manager
-	nodeProvider cluster.NodeProvider
-	logger       *logging.Logger
+	rootdir    string
+	shardMgr   *shardmgr.Manager
+	raftEngine *raft.Engine
+	logger     *logging.Logger
 }
 
 // New instantiates a Server.
@@ -32,18 +31,18 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel 
 		return nil, fmt.Errorf("Create root directory failed | rootdir=%v | err=[%w]", rootdir, err)
 	}
 
-	// create node provider
-	nodeProvider, err := cluster.NewK8SNodeProvider(logLevel)
+	// create Raft engine
+	raftEngine, err := raft.NewEngine(logLevel)
 	if err != nil {
-		return nil, fmt.Errorf("Create Kubernetes node provider failed | err=[%w]", err)
+		return nil, fmt.Errorf("Create Raft engine failed | rootdir=%v | err=[%w]", rootdir, err)
 	}
 
 	// instantiate
 	return &Server{
-		rootdir:      rootdir,
-		shardMgr:     shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
-		nodeProvider: nodeProvider,
-		logger:       logging.New(logLevel),
+		rootdir:    rootdir,
+		shardMgr:   shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
+		raftEngine: raftEngine,
+		logger:     logging.New(logLevel),
 	}, nil
 }
 
@@ -51,7 +50,7 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel 
 func (s *Server) Serve(storageAddr string, raftAddr string) error {
 	go s.serveStorage(storageAddr)
 	go s.serveRaft(raftAddr)
-	s.raftLoop()
+	s.raftEngine.Run()
 	return nil
 }
 
@@ -126,53 +125,5 @@ func (s *Server) serveRaft(addr string) {
 	s.logger.Info("Starting raft server | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
 	if err := svr.Serve(listener); err != nil {
 		s.logger.Error("Starting raft server failed | err=[%v]", err)
-	}
-}
-
-func (s *Server) raftLoop() {
-	for {
-		time.Sleep(time.Duration(3) * time.Second)
-
-		idx, err := s.nodeProvider.Index()
-		if err != nil || idx > 0 {
-			if err != nil {
-				s.logger.Error("Get current node index failed | err=[%v]", err)
-			}
-			continue
-		}
-
-		size, err := s.nodeProvider.Size()
-		if err != nil {
-			s.logger.Error("Get number of nodes failed | idx=%v | err=[%v]", idx, err)
-			continue
-		}
-
-		for i := 0; i < size; i++ {
-			if i == idx {
-				continue
-			}
-
-			addr, err := s.nodeProvider.RaftAddr(i)
-			if err != nil {
-				s.logger.Error("Get Raft server address failed | idx=%v | size=%v | err=[%v]", idx, size, err)
-				continue
-			}
-
-			conn, err := grpc.Dial(addr, grpc.WithInsecure())
-			if err != nil {
-				s.logger.Error("Connect Raft server failed | idx=%v | size=%v | addr=%v | err=[%v]",
-					idx, size, addr, err)
-				continue
-			}
-			defer conn.Close()
-			client := pb.NewRaftClient(conn)
-
-			req := &pb.AppendEntriesReq{}
-			if _, err := client.AppendEntries(context.Background(), req); err != nil {
-				s.logger.Error("Send Raft request failed | idx=%v | size=%v | addr=%v | err=[%v]",
-					idx, size, addr, err)
-				continue
-			}
-		}
 	}
 }
