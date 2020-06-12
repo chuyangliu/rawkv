@@ -22,6 +22,10 @@ const (
 	fileCurrentTerm string = "currentTerm"
 	fileVotedFor    string = "votedFor"
 	fileLogs        string = "logs"
+
+	roleLeader    uint8 = 0
+	roleFollower  uint8 = 1
+	roleCandidate uint8 = 2
 )
 
 // Engine manages Raft states and operations.
@@ -42,6 +46,12 @@ type Engine struct {
 	// volatile state on all leaders
 	nextIndex  []uint64
 	matchIndex []uint64
+
+	// leader or follower or candidate
+	role uint8
+
+	// network address of the leader node
+	leaderAddr string
 }
 
 // NewEngine instantiates an Engine.
@@ -76,6 +86,9 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 
 		nextIndex:  make([]uint64, numNodes),
 		matchIndex: make([]uint64, numNodes),
+
+		role:       roleFollower,
+		leaderAddr: "",
 	}
 
 	// nextIndex starts at 1
@@ -93,8 +106,8 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 
 func (e *Engine) String() string {
 	return fmt.Sprintf("[raftdir=%v | currentTerm=%v | votedFor=%v | logSize=%v | commitIndex=%v | lastApplied=%v"+
-		" | nextIndex=%v | matchIndex=%v]", e.raftdir, e.currentTerm, e.votedFor, len(e.logs)-1, e.commitIndex,
-		e.lastApplied, e.nextIndex, e.matchIndex)
+		" | nextIndex=%v | matchIndex=%v | role=%v | leaderAddr=%v]", e.raftdir, e.currentTerm, e.votedFor,
+		len(e.logs)-1, e.commitIndex, e.lastApplied, e.nextIndex, e.matchIndex, e.role, e.leaderAddr)
 }
 
 // Run starts Raft service on current node.
