@@ -1,20 +1,16 @@
 package raft
 
 import (
-	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"path"
 	"time"
-	"unsafe"
-
-	"google.golang.org/grpc"
 
 	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
-	"github.com/chuyangliu/rawkv/pkg/pb"
 )
 
 const (
@@ -23,9 +19,9 @@ const (
 	fileVotedFor    string = "votedFor"
 	fileLogs        string = "logs"
 
-	roleLeader    uint8 = 0
-	roleFollower  uint8 = 1
-	roleCandidate uint8 = 2
+	roleFollower  uint8 = 0
+	roleCandidate uint8 = 1
+	roleLeader    uint8 = 2
 )
 
 // Engine manages Raft states and operations.
@@ -52,6 +48,11 @@ type Engine struct {
 
 	// network address of the leader node
 	leaderAddr string
+
+	// election timer
+	electionTimer     *time.Timer
+	electionTimeout   time.Duration
+	electionTimeoutCh chan bool
 }
 
 // NewEngine instantiates an Engine.
@@ -89,6 +90,10 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 
 		role:       roleFollower,
 		leaderAddr: "",
+
+		electionTimer:     nil,
+		electionTimeout:   time.Duration(500) * time.Millisecond,
+		electionTimeoutCh: make(chan bool),
 	}
 
 	// nextIndex starts at 1
@@ -112,51 +117,18 @@ func (e *Engine) String() string {
 
 // Run starts Raft service on current node.
 func (e *Engine) Run() {
-	e.logger.Info("Raft service started | states=%v", e)
-
 	for {
-		time.Sleep(time.Duration(3) * time.Second)
-
-		idx, err := e.nodeProvider.Index()
-		if err != nil || idx > 0 {
-			if err != nil {
-				e.logger.Error("Get current node index failed | err=[%v]", err)
-			}
-			continue
-		}
-
-		size, err := e.nodeProvider.Size()
-		if err != nil {
-			e.logger.Error("Get number of nodes failed | idx=%v | err=[%v]", idx, err)
-			continue
-		}
-
-		for i := 0; i < size; i++ {
-			if i == idx {
-				continue
-			}
-
-			addr, err := e.nodeProvider.RaftAddr(i)
-			if err != nil {
-				e.logger.Error("Get Raft server address failed | idx=%v | size=%v | err=[%v]", idx, size, err)
-				continue
-			}
-
-			conn, err := grpc.Dial(addr, grpc.WithInsecure())
-			if err != nil {
-				e.logger.Error("Connect Raft server failed | idx=%v | size=%v | addr=%v | err=[%v]",
-					idx, size, addr, err)
-				continue
-			}
-			defer conn.Close()
-			client := pb.NewRaftClient(conn)
-
-			req := &pb.AppendEntriesReq{}
-			if _, err := client.AppendEntries(context.Background(), req); err != nil {
-				e.logger.Error("Send Raft request failed | idx=%v | size=%v | addr=%v | err=[%v]",
-					idx, size, addr, err)
-				continue
-			}
+		e.logger.Debug("Print Raft states | states=%v", e)
+		switch e.role {
+		case roleFollower:
+			e.follower()
+		case roleCandidate:
+			e.candidate()
+		case roleLeader:
+			e.leader()
+		default:
+			e.logger.Error("Invalid Raft role | role=%v", e.role)
+			break
 		}
 	}
 }
@@ -192,19 +164,15 @@ func (e *Engine) initCurrentTerm(filePath string) error {
 	}
 	defer file.Close()
 
-	buf := make([]byte, unsafe.Sizeof(e.currentTerm))
-
-	if _, err := io.ReadFull(file, buf); err == nil {
-		for i, b := range buf {
-			e.currentTerm |= uint64(b) << (i * 8)
+	if err := binary.Read(file, binary.BigEndian, &e.currentTerm); err != nil {
+		if err == io.EOF {
+			e.currentTerm = 0
+			if err = binary.Write(file, binary.BigEndian, e.currentTerm); err != nil {
+				return fmt.Errorf("Write initial currentTerm file failed | path=%v | err=[%w]", filePath, err)
+			}
+		} else {
+			return fmt.Errorf("Read currentTerm file failed | path=%v | err=[%w]", filePath, err)
 		}
-	} else if err == io.EOF {
-		if _, err = file.Write(buf); err != nil {
-			return fmt.Errorf("Write initial currentTerm file failed | path=%v | err=[%w]", filePath, err)
-		}
-		e.currentTerm = 0
-	} else {
-		return fmt.Errorf("Read currentTerm file failed | path=%v | err=[%w]", filePath, err)
 	}
 
 	return nil
@@ -249,4 +217,105 @@ func (e *Engine) initLogs(filePath string) error {
 	}
 
 	return nil
+}
+
+func (e *Engine) follower() {
+	e.electionTimer = time.AfterFunc(e.electionTimeout, e.electionTimeoutHandler)
+	<-e.electionTimeoutCh
+}
+
+func (e *Engine) candidate() {
+
+	// increate current term
+	if err := e.incrCurrentTerm(); err != nil {
+		e.logger.Error("Increase current term failed | err=[%v]", err)
+		return
+	}
+
+	// vote for self
+	if err := e.vote(""); err != nil {
+		e.logger.Error("Vote for self failed | err=[%v]", err)
+		return
+	}
+
+	// start election timer
+	e.electionTimer = time.AfterFunc(e.electionTimeout, e.electionTimeoutHandler)
+
+	// send RequestVote RPCs to all other servers
+	majority := make(chan bool)
+	e.requestVotes(majority)
+
+	// wait timeout or vote replies
+	select {
+	case <-e.electionTimeoutCh:
+		return
+	case promote := <-majority:
+		if promote {
+			e.leaderAddr = e.votedFor
+			e.role = roleLeader
+		}
+	}
+}
+
+func (e *Engine) electionTimeoutHandler() {
+	if e.role == roleFollower {
+		e.role = roleCandidate
+	}
+	e.electionTimeoutCh <- true
+}
+
+func (e *Engine) incrCurrentTerm() error {
+
+	filePath := path.Join(e.raftdir, fileCurrentTerm)
+	file, err := os.OpenFile(filePath, os.O_WRONLY, 0666)
+	if err != nil {
+		return fmt.Errorf("Open currentTerm file failed | path=%v | err=[%w]", filePath, err)
+	}
+	defer file.Close()
+
+	e.currentTerm++
+	if err = binary.Write(file, binary.BigEndian, e.currentTerm); err != nil {
+		return fmt.Errorf("Write currentTerm file failed | path=%v | err=[%w]", filePath, err)
+	}
+
+	return nil
+}
+
+func (e *Engine) vote(addr string) error {
+
+	if addr == "" { // vote for self
+		idx, err := e.nodeProvider.Index()
+		if err != nil {
+			return fmt.Errorf("Get current node index failed | err=[%w]", err)
+		}
+		addr, err = e.nodeProvider.RaftAddr(idx)
+		if err != nil {
+			return fmt.Errorf("Get current node address failed | nodeIdx=%v | err=[%w]", idx, err)
+		}
+	}
+
+	filePath := path.Join(e.raftdir, fileVotedFor)
+	file, err := os.OpenFile(filePath, os.O_WRONLY, 0666)
+	if err != nil {
+		return fmt.Errorf("Open votedFor file failed | path=%v | err=[%w]", filePath, err)
+	}
+	defer file.Close()
+
+	if err := file.Truncate(0); err != nil {
+		return fmt.Errorf("Truncate votedFor file failed | path=%v | err=[%w]", filePath, err)
+	}
+
+	if _, err := file.WriteString(addr); err != nil {
+		return fmt.Errorf("Write votedFor file failed | path=%v | err=[%w]", filePath, err)
+	}
+
+	return nil
+}
+
+func (e *Engine) requestVotes(majority chan bool) {
+	// TODO
+}
+
+func (e *Engine) leader() {
+	// TODO
 }
