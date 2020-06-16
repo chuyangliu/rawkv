@@ -8,7 +8,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
-	"time"
 
 	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
@@ -57,8 +56,7 @@ type Engine struct {
 	leaderAddr string
 
 	// election timer
-	electionTimer   *time.Timer
-	electionTimeout time.Duration
+	electionTimer *raftTimer
 }
 
 // NewEngine instantiates an Engine.
@@ -110,8 +108,7 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 		role:       roleFollower,
 		leaderAddr: "",
 
-		electionTimer:   nil,
-		electionTimeout: time.Duration(500) * time.Millisecond,
+		electionTimer: newRaftTimer(logLevel, 2000, 5000),
 	}
 
 	// nextIndex starts at 1
@@ -249,9 +246,9 @@ func (e *Engine) initLogs(filePath string) error {
 }
 
 func (e *Engine) follower() {
-	e.startElectionTimer()
+	e.electionTimer.start()
 	select {
-	case <-e.electionTimeoutCh():
+	case <-e.electionTimer.timeout():
 		e.role = roleCandidate
 		return
 		// TODO wait append entry channel
@@ -273,7 +270,7 @@ func (e *Engine) candidate() {
 	}
 
 	// start election timer
-	e.startElectionTimer()
+	e.electionTimer.start()
 
 	// send RequestVote RPCs to all other servers
 	majority := make(chan bool)
@@ -281,29 +278,15 @@ func (e *Engine) candidate() {
 
 	// wait timeout or vote replies
 	select {
-	case <-e.electionTimeoutCh():
+	case <-e.electionTimer.timeout():
 		return
 	case promote := <-majority:
-		e.stopElectionTimer()
+		e.electionTimer.stop()
 		if promote {
 			e.leaderAddr = e.votedFor
 			e.role = roleLeader
 		}
 	}
-}
-
-func (e *Engine) startElectionTimer() {
-	e.electionTimer = time.NewTimer(e.electionTimeout)
-}
-
-func (e *Engine) stopElectionTimer() {
-	if e.electionTimer != nil {
-		e.electionTimer.Stop()
-	}
-}
-
-func (e *Engine) electionTimeoutCh() <-chan time.Time {
-	return e.electionTimer.C
 }
 
 func (e *Engine) incrCurrentTerm() error {
@@ -377,16 +360,16 @@ func (e *Engine) requestVotesAsync(majority chan bool) {
 func (e *Engine) requestVoteAsync(target int, votes chan bool) {
 	go func() {
 
-		addr, err := e.nodeProvider.RaftAddr(target)
+		targetAddr, err := e.nodeProvider.RaftAddr(target)
 		if err != nil {
 			e.logger.Error("Get node address failed | target=%v | states=%v | err=[%v]", target, e, err)
 			votes <- false
 			return
 		}
 
-		conn, err := grpc.Dial(addr, grpc.WithInsecure())
+		conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
 		if err != nil {
-			e.logger.Error("Connect Raft server failed | addr=%v | states=%v | err=[%v]", addr, e, err)
+			e.logger.Error("Connect Raft server failed | targetAddr=%v | states=%v | err=[%v]", targetAddr, e, err)
 			votes <- false
 			return
 		}
@@ -395,12 +378,12 @@ func (e *Engine) requestVoteAsync(target int, votes chan bool) {
 		req := &pb.RequestVoteReq{}
 		resp, err := pb.NewRaftClient(conn).RequestVote(context.Background(), req)
 		if err != nil {
-			e.logger.Error("Send RequestVote RPC failed | addr=%v | states=%v | err=[%v]", addr, e, err)
+			e.logger.Error("RequestVote RPC sent failed | targetAddr=%v | states=%v | err=[%v]", targetAddr, e, err)
 			votes <- false
 			return
 		}
 
-		e.logger.Debug("RequestVote RPC Sent | req=%v | resp=%v | states=%v", req, resp, e)
+		e.logger.Debug("RequestVote RPC sent | req=%v | resp=%v | targetAddr=%v | states=%v", req, resp, targetAddr, e)
 		votes <- false // TODO RequestVote request
 	}()
 }
