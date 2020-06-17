@@ -15,51 +15,89 @@ const (
 )
 
 type raftLog struct {
-	cmd uint16
-	key store.Key
-	val store.Value
+	index uint64
+	term  uint64
+	cmd   uint16
+	key   store.Key
+	val   store.Value
 }
 
 func readLog(reader io.Reader) (*raftLog, error) {
 
-	cmd, err := readCmd(reader)
+	index, err := readIndex(reader)
 	if err != nil {
 		if errors.Unwrap(err) == io.EOF {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("Read command failed | err=[%w]", err)
+		return nil, fmt.Errorf("Read log index failed | err=[%w]", err)
+	}
+
+	term, err := readTerm(reader)
+	if err != nil {
+		return nil, fmt.Errorf("Read log term failed | err=[%w]", err)
+	}
+
+	cmd, err := readCmd(reader)
+	if err != nil {
+		return nil, fmt.Errorf("Read log command failed | err=[%w]", err)
 	}
 
 	keyLen, err := readKVLen(reader)
 	if err != nil {
-		return nil, fmt.Errorf("Read key length failed | err=[%w]", err)
+		return nil, fmt.Errorf("Read log key length failed | err=[%w]", err)
 	}
 
 	key, err := readKey(reader, keyLen)
 	if err != nil {
-		return nil, fmt.Errorf("Read key failed | err=[%w]", err)
+		return nil, fmt.Errorf("Read log key failed | err=[%w]", err)
 	}
 
 	log := &raftLog{
-		cmd: cmd,
-		key: key,
+		index: index,
+		term:  term,
+		cmd:   cmd,
+		key:   key,
 	}
 
 	if cmd == cmdPut {
 		valLen, err := readKVLen(reader)
 		if err != nil {
-			return nil, fmt.Errorf("Read value length failed | err=[%w]", err)
+			return nil, fmt.Errorf("Read log value length failed | err=[%w]", err)
 		}
 
 		val, err := readValue(reader, valLen)
 		if err != nil {
-			return nil, fmt.Errorf("Read value failed | err=[%w]", err)
+			return nil, fmt.Errorf("Read log value failed | err=[%w]", err)
 		}
 
 		log.val = val
 	}
 
 	return log, nil
+}
+
+func readIndex(reader io.Reader) (uint64, error) {
+	raw := make([]byte, unsafe.Sizeof(uint64(0)))
+	if _, err := io.ReadFull(reader, raw); err != nil {
+		return 0, fmt.Errorf("Read full failed | err=[%w]", err)
+	}
+	val := uint64(0)
+	for i, b := range raw {
+		val |= uint64(b) << (8 * i)
+	}
+	return val, nil
+}
+
+func readTerm(reader io.Reader) (uint64, error) {
+	raw := make([]byte, unsafe.Sizeof(uint64(0)))
+	if _, err := io.ReadFull(reader, raw); err != nil {
+		return 0, fmt.Errorf("Read full failed | err=[%w]", err)
+	}
+	val := uint64(0)
+	for i, b := range raw {
+		val |= uint64(b) << (8 * i)
+	}
+	return val, nil
 }
 
 func readCmd(reader io.Reader) (uint16, error) {

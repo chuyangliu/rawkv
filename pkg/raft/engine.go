@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"time"
 
 	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
@@ -149,14 +150,36 @@ func (e *Engine) Run() {
 			e.logger.Error("Invalid Raft role | states=%v", e)
 			break
 		}
+		time.Sleep(3 * time.Second) // TODO remove later
 	}
 }
 
 // RequestVoteHandler handles RequestVote RPC request
 func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
-	resp := &pb.RequestVoteResp{}
-	// TODO RequestVoteHandler
-	e.logger.Debug("RequestVote RPC Received | req=%v | resp=%v | states=%v", req, resp, e)
+	e.logger.Debug("RequestVote RPC request received | req=%v | states=%v", req, e)
+	grantVote := false
+
+	if req.Term >= e.currentTerm {
+		// TODO grant vote when logs at least up-to-date
+		grantVote = (e.votedFor == nodeIDNil || e.votedFor == req.CandidateID)
+		if req.Term > e.currentTerm {
+			e.role = roleFollower
+		}
+	}
+
+	if grantVote && e.votedFor == nodeIDNil {
+		if err := e.vote(req.CandidateID); err != nil {
+			e.logger.Error("Vote candidate failed | req=%v | err=[%v]", req, err)
+			grantVote = false
+		}
+	}
+
+	resp := &pb.RequestVoteResp{
+		Term:        e.currentTerm,
+		VoteGranted: grantVote,
+	}
+
+	e.logger.Debug("RequestVote RPC response sent | req=%v | resp=%v | states=%v", req, resp, e)
 	return resp, nil
 }
 
@@ -237,7 +260,8 @@ func (e *Engine) initLogs(filePath string) error {
 	}
 	defer file.Close()
 
-	e.logs = make([]*raftLog, 1) // log index starts at 1
+	// add a dummy log to make log index start at 1
+	e.logs = []*raftLog{{index: 0, term: 0}}
 
 	for {
 		log, err := readLog(file)
@@ -306,11 +330,11 @@ func (e *Engine) incrCurrentTerm() error {
 	}
 	defer file.Close()
 
-	e.currentTerm++
-	if err = binary.Write(file, binary.BigEndian, e.currentTerm); err != nil {
+	if err = binary.Write(file, binary.BigEndian, e.currentTerm+1); err != nil {
 		return fmt.Errorf("Write currentTerm file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 	}
 
+	e.currentTerm++
 	return nil
 }
 
@@ -323,11 +347,11 @@ func (e *Engine) vote(nodeID int32) error {
 	}
 	defer file.Close()
 
-	e.votedFor = nodeID
-	if err = binary.Write(file, binary.BigEndian, e.votedFor); err != nil {
+	if err = binary.Write(file, binary.BigEndian, nodeID); err != nil {
 		return fmt.Errorf("Write votedFor file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 	}
 
+	e.votedFor = nodeID
 	return nil
 }
 
@@ -371,16 +395,28 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 		}
 		defer conn.Close()
 
-		req := &pb.RequestVoteReq{}
+		lastLog := e.logs[len(e.logs)-1]
+		req := &pb.RequestVoteReq{
+			Term:         e.currentTerm,
+			CandidateID:  e.nodeID,
+			LastLogIndex: lastLog.index,
+			LastLogTerm:  lastLog.term,
+		}
+
 		resp, err := pb.NewRaftClient(conn).RequestVote(context.Background(), req)
 		if err != nil {
-			e.logger.Error("RequestVote RPC sent failed | targetAddr=%v | states=%v | err=[%v]", targetAddr, e, err)
+			e.logger.Error("RequestVote RPC request failed | targetAddr=%v | states=%v | err=[%v]", targetAddr, e, err)
 			votes <- false
 			return
 		}
-
 		e.logger.Debug("RequestVote RPC sent | req=%v | resp=%v | targetAddr=%v | states=%v", req, resp, targetAddr, e)
-		votes <- false // TODO RequestVote request
+
+		if resp.GetTerm() > e.currentTerm {
+			e.role = roleFollower
+			votes <- false
+		} else {
+			votes <- resp.VoteGranted
+		}
 	}()
 }
 

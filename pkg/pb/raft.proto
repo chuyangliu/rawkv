@@ -10,9 +10,15 @@ service Raft {
 }
 
 message RequestVoteReq {
+    uint64 term = 1;
+    int32 candidateID = 2;
+    uint64 lastLogIndex = 3;
+    uint64 lastLogTerm = 4;
 }
 
 message RequestVoteResp {
+    uint64 term = 1;
+    bool voteGranted = 2;
 }
 
 message AppendEntriesReq {
