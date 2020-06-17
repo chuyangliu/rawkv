@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path"
 
@@ -24,6 +23,8 @@ const (
 	roleFollower  uint8 = 0
 	roleCandidate uint8 = 1
 	roleLeader    uint8 = 2
+
+	nodeIDNil int32 = -1
 )
 
 // Engine manages Raft states and operations.
@@ -33,12 +34,12 @@ type Engine struct {
 
 	// cluster info
 	nodeProvider cluster.NodeProvider
-	numNodes     int
-	nodeIndex    int
+	clusterSize  int32
+	nodeID       int32
 
 	// persistent state on all servers
 	currentTerm uint64
-	votedFor    string
+	votedFor    int32
 	logs        []*raftLog // log index starts at 1
 
 	// volatile state on all servers
@@ -52,8 +53,8 @@ type Engine struct {
 	// leader or follower or candidate
 	role uint8
 
-	// network address of the leader node
-	leaderAddr string
+	// leader node id
+	leaderID int32
 
 	// election timer
 	electionTimer *raftTimer
@@ -75,19 +76,20 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 	}
 
 	// get number of Raft nodes in the cluster
-	numNodes, err := nodeProvider.Size()
+	clusterSize, err := nodeProvider.Size()
 	if err != nil {
 		return nil, fmt.Errorf("Query cluster size failed | raftdir=%v | err=[%w]", raftdir, err)
 	}
-	if numNodes < 3 {
+	if clusterSize < 3 {
 		return nil, fmt.Errorf("Require at least three nodes in the cluster for fault tolerance | raftdir=%v"+
-			" | numNodes=%v | err=[%w]", raftdir, numNodes, err)
+			" | clusterSize=%v | err=[%w]", raftdir, clusterSize, err)
 	}
 
 	// get current node index in the cluster
-	nodeIndex, err := nodeProvider.Index()
+	nodeID, err := nodeProvider.ID()
 	if err != nil {
-		return nil, fmt.Errorf("Query node index failed | raftdir=%v | numNodes=%v | err=[%w]", raftdir, numNodes, err)
+		return nil, fmt.Errorf("Query node id failed | raftdir=%v | clusterSize=%v | err=[%w]",
+			raftdir, clusterSize, err)
 	}
 
 	// instantiate
@@ -96,17 +98,17 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 		logger:  logging.New(logLevel),
 
 		nodeProvider: nodeProvider,
-		numNodes:     numNodes,
-		nodeIndex:    nodeIndex,
+		clusterSize:  clusterSize,
+		nodeID:       nodeID,
 
 		commitIndex: 0,
 		lastApplied: 0,
 
-		nextIndex:  make([]uint64, numNodes),
-		matchIndex: make([]uint64, numNodes),
+		nextIndex:  make([]uint64, clusterSize),
+		matchIndex: make([]uint64, clusterSize),
 
-		role:       roleFollower,
-		leaderAddr: "",
+		role:     roleFollower,
+		leaderID: nodeIDNil,
 
 		electionTimer: newRaftTimer(logLevel, 2000, 5000),
 	}
@@ -118,18 +120,18 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 
 	// init Raft persistent states
 	if err := engine.initPersistStates(); err != nil {
-		return nil, fmt.Errorf("Initialize Raft persistent states failed | raftdir=%v | numNodes=%v | nodeIndex=%v"+
-			" | err=[%w]", raftdir, numNodes, nodeIndex, err)
+		return nil, fmt.Errorf("Initialize Raft persistent states failed | raftdir=%v | clusterSize=%v | nodeID=%v"+
+			" | err=[%w]", raftdir, clusterSize, nodeID, err)
 	}
 
 	return engine, nil
 }
 
 func (e *Engine) String() string {
-	return fmt.Sprintf("[raftdir=%v | numNodes=%v | nodeIndex=%v | currentTerm=%v | votedFor=%v | logSize=%v"+
-		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderAddr=%v]", e.raftdir,
-		e.numNodes, e.nodeIndex, e.currentTerm, e.votedFor, len(e.logs)-1, e.commitIndex, e.lastApplied, e.nextIndex,
-		e.matchIndex, e.role, e.leaderAddr)
+	return fmt.Sprintf("[raftdir=%v | clusterSize=%v | nodeID=%v | currentTerm=%v | votedFor=%v | logSize=%v"+
+		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderID=%v]", e.raftdir,
+		e.clusterSize, e.nodeID, e.currentTerm, e.votedFor, len(e.logs)-1, e.commitIndex, e.lastApplied, e.nextIndex,
+		e.matchIndex, e.role, e.leaderID)
 }
 
 // Run starts Raft service on current node.
@@ -206,18 +208,24 @@ func (e *Engine) initCurrentTerm(filePath string) error {
 
 func (e *Engine) initVotedFor(filePath string) error {
 
-	file, err := os.OpenFile(filePath, os.O_RDONLY|os.O_CREATE, 0666)
+	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return fmt.Errorf("Open votedFor file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 	}
 	defer file.Close()
 
-	bytes, err := ioutil.ReadAll(file)
-	if err != nil {
-		return fmt.Errorf("Read votedFor file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
+	if err := binary.Read(file, binary.BigEndian, &e.votedFor); err != nil {
+		if err == io.EOF {
+			e.votedFor = nodeIDNil
+			if err = binary.Write(file, binary.BigEndian, e.votedFor); err != nil {
+				return fmt.Errorf("Write initial votedFor file failed | path=%v | states=%v | err=[%w]",
+					filePath, e, err)
+			}
+		} else {
+			return fmt.Errorf("Read votedFor file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
+		}
 	}
 
-	e.votedFor = string(bytes)
 	return nil
 }
 
@@ -264,7 +272,7 @@ func (e *Engine) candidate() {
 	}
 
 	// vote for self
-	if err := e.vote(""); err != nil {
+	if err := e.vote(e.nodeID); err != nil {
 		e.logger.Error("Vote for self failed | states=%v | err=[%v]", e, err)
 		return
 	}
@@ -280,10 +288,10 @@ func (e *Engine) candidate() {
 	select {
 	case <-e.electionTimer.timeout():
 		return
-	case promote := <-majority:
+	case suc := <-majority:
 		e.electionTimer.stop()
-		if promote {
-			e.leaderAddr = e.votedFor
+		if suc {
+			e.leaderID = e.votedFor
 			e.role = roleLeader
 		}
 	}
@@ -306,15 +314,7 @@ func (e *Engine) incrCurrentTerm() error {
 	return nil
 }
 
-func (e *Engine) vote(addr string) error {
-
-	if addr == "" { // vote for self
-		var err error
-		addr, err = e.nodeProvider.RaftAddr(e.nodeIndex)
-		if err != nil {
-			return fmt.Errorf("Get current node address failed | states=%v | err=[%w]", e, err)
-		}
-	}
+func (e *Engine) vote(nodeID int32) error {
 
 	filePath := path.Join(e.raftdir, fileVotedFor)
 	file, err := os.OpenFile(filePath, os.O_WRONLY, 0666)
@@ -323,15 +323,11 @@ func (e *Engine) vote(addr string) error {
 	}
 	defer file.Close()
 
-	if err := file.Truncate(0); err != nil {
-		return fmt.Errorf("Truncate votedFor file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
-	}
-
-	if _, err := file.WriteString(addr); err != nil {
+	e.votedFor = nodeID
+	if err = binary.Write(file, binary.BigEndian, e.votedFor); err != nil {
 		return fmt.Errorf("Write votedFor file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 	}
 
-	e.votedFor = addr
 	return nil
 }
 
@@ -339,30 +335,30 @@ func (e *Engine) requestVotesAsync(majority chan bool) {
 	go func() {
 
 		votes := make(chan bool)
-		for i := 0; i < e.numNodes; i++ {
-			if i != e.nodeIndex {
+		for i := int32(0); i < e.clusterSize; i++ {
+			if i != e.nodeID {
 				e.requestVoteAsync(i, votes)
 			}
 		}
 
-		numGranted := 0
-		for i := 0; i < e.numNodes-1; i++ {
+		numGranted := int32(0)
+		for i := int32(0); i < e.clusterSize-1; i++ {
 			if <-votes {
 				numGranted++
 			}
 		}
 
 		// no need to add 1 when counting majority since current node votes for self in advance
-		majority <- (numGranted >= e.numNodes/2)
+		majority <- (numGranted >= e.clusterSize/2)
 	}()
 }
 
-func (e *Engine) requestVoteAsync(target int, votes chan bool) {
+func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 	go func() {
 
-		targetAddr, err := e.nodeProvider.RaftAddr(target)
+		targetAddr, err := e.nodeProvider.RaftAddr(targetID)
 		if err != nil {
-			e.logger.Error("Get node address failed | target=%v | states=%v | err=[%v]", target, e, err)
+			e.logger.Error("Get node address failed | targetID=%v | states=%v | err=[%v]", targetID, e, err)
 			votes <- false
 			return
 		}

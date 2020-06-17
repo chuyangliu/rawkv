@@ -24,7 +24,7 @@ const (
 // K8SNodeProvider implements NodeProvider for a Kubernetes cluster.
 // An example of cluster config can be found at kubernetes/rawkv.yaml.
 type K8SNodeProvider struct {
-	idx       int    // current node index
+	id        int32  // current node id
 	namespace string // cluster namespace
 	addrFmt   string // network address format for nodes
 	raftPort  string // port number for raft service
@@ -46,9 +46,9 @@ func NewK8SNodeProvider(logLevel int) (*K8SNodeProvider, error) {
 	if pos < 0 || pos == len(podName) {
 		return nil, fmt.Errorf("Invalid pod name | podName=%v", podName)
 	}
-	idxStr := podName[pos+1:]
-	idx, err := strconv.Atoi(idxStr)
-	if err != nil || idx < 0 {
+	idStr := podName[pos+1:]
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id < 0 {
 		return nil, fmt.Errorf("Invalid node index | podName=%v | err=[%w]", podName, err)
 	}
 
@@ -80,11 +80,11 @@ func NewK8SNodeProvider(logLevel int) (*K8SNodeProvider, error) {
 		return nil, fmt.Errorf("Invalid env | env=%v | val=%v", envRaftPort, raftPort)
 	}
 
-	logger.Info("Kubernetes node provider created | idx=%v | namespace=%v | addrFmt=%v | raftPort=%v",
-		idx, namespace, addrFmt, raftPort)
+	logger.Info("Kubernetes node provider created | id=%v | namespace=%v | addrFmt=%v | raftPort=%v",
+		id, namespace, addrFmt, raftPort)
 
 	return &K8SNodeProvider{
-		idx:       idx,
+		id:        int32(id),
 		namespace: namespace,
 		addrFmt:   addrFmt,
 		raftPort:  raftPort,
@@ -96,18 +96,18 @@ func NewK8SNodeProvider(logLevel int) (*K8SNodeProvider, error) {
 // NodeProvider Implementation
 // ---------------------------
 
-// Index returns the index of current node.
-func (p *K8SNodeProvider) Index() (int, error) {
-	return p.idx, nil
+// ID returns the id of current node.
+func (p *K8SNodeProvider) ID() (int32, error) {
+	return p.id, nil
 }
 
-// RaftAddr returns the network address of node (with the given index) providing Raft service.
-func (p *K8SNodeProvider) RaftAddr(index int) (string, error) {
-	return fmt.Sprintf(p.addrFmt, index, p.raftPort), nil
+// RaftAddr returns the network address of node (with the given id) providing Raft service.
+func (p *K8SNodeProvider) RaftAddr(id int32) (string, error) {
+	return fmt.Sprintf(p.addrFmt, id, p.raftPort), nil
 }
 
 // Size returns the number of nodes in the cluster.
-func (p *K8SNodeProvider) Size() (int, error) {
+func (p *K8SNodeProvider) Size() (int32, error) {
 	clients, err := newClients()
 	if err != nil {
 		return -1, fmt.Errorf("Create k8s clients failed | err=[%w]", err)
@@ -116,7 +116,7 @@ func (p *K8SNodeProvider) Size() (int, error) {
 	if err != nil {
 		return -1, fmt.Errorf("List pods info failed | err=[%w]", err)
 	}
-	return len(pods.Items), nil
+	return int32(len(pods.Items)), nil
 }
 
 func getClusterDomain() (string, error) {
