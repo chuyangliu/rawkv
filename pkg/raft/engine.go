@@ -397,14 +397,6 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 			return
 		}
 
-		conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
-		if err != nil {
-			e.logger.Error("Connect raft server failed | targetAddr=%v | states=%v | err=[%v]", targetAddr, e, err)
-			votes <- false
-			return
-		}
-		defer conn.Close()
-
 		lastLog := e.logs[len(e.logs)-1]
 		req := &pb.RequestVoteReq{
 			Term:         e.currentTerm,
@@ -413,14 +405,14 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 			LastLogTerm:  lastLog.term,
 		}
 
-		resp, err := pb.NewRaftClient(conn).RequestVote(context.Background(), req)
+		resp, err := e.requestVote(targetAddr, req)
 		if err != nil {
-			e.logger.Error("RequestVote failed | req=%v | targetAddr=%v | states=%v | err=[%v]",
-				req, targetAddr, e, err)
+			e.logger.Error("RequestVote failed | targetAddr=%v | req=%v | states=%v | err=[%v]",
+				targetAddr, req, e, err)
 			votes <- false
 			return
 		}
-		e.logger.Debug("RequestVote sent | req=%v | resp=%v | targetAddr=%v | states=%v", req, resp, targetAddr, e)
+		e.logger.Debug("RequestVote sent | targetAddr=%v | req=%v | resp=%v | states=%v", targetAddr, req, resp, e)
 
 		if resp.GetTerm() > e.currentTerm {
 			e.role = roleFollower
@@ -429,6 +421,23 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 			votes <- resp.VoteGranted
 		}
 	}()
+}
+
+func (e *Engine) requestVote(targetAddr string, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
+
+	conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
+	if err != nil {
+		return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | states=%v | err=[%w]", targetAddr, e, err)
+	}
+	defer conn.Close()
+
+	resp, err := pb.NewRaftClient(conn).RequestVote(context.Background(), req)
+	if err != nil {
+		return nil, fmt.Errorf("RequestVote RPC failed | targetAddr=%v | req=%v | states=%v | err=[%v]",
+			targetAddr, req, e, err)
+	}
+
+	return resp, nil
 }
 
 func (e *Engine) leader() {
