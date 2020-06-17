@@ -9,10 +9,11 @@ import (
 	"path"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/pb"
-	"google.golang.org/grpc"
 )
 
 const (
@@ -128,61 +129,6 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 	return engine, nil
 }
 
-func (e *Engine) String() string {
-	return fmt.Sprintf("[raftdir=%v | clusterSize=%v | nodeID=%v | currentTerm=%v | votedFor=%v | logSize=%v"+
-		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderID=%v]", e.raftdir,
-		e.clusterSize, e.nodeID, e.currentTerm, e.votedFor, len(e.logs)-1, e.commitIndex, e.lastApplied, e.nextIndex,
-		e.matchIndex, e.role, e.leaderID)
-}
-
-// Run starts Raft service on current node.
-func (e *Engine) Run() {
-	for {
-		e.logger.Debug("Print Raft states | states=%v", e)
-		switch e.role {
-		case roleFollower:
-			e.follower()
-		case roleCandidate:
-			e.candidate()
-		case roleLeader:
-			e.leader()
-		default:
-			e.logger.Error("Invalid Raft role | states=%v", e)
-			break
-		}
-		time.Sleep(3 * time.Second) // TODO remove later
-	}
-}
-
-// RequestVoteHandler handles RequestVote RPC request
-func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
-	e.logger.Debug("RequestVote RPC request received | req=%v | states=%v", req, e)
-	grantVote := false
-
-	if req.Term >= e.currentTerm {
-		// TODO grant vote when logs at least up-to-date
-		grantVote = (e.votedFor == nodeIDNil || e.votedFor == req.CandidateID)
-		if req.Term > e.currentTerm {
-			e.role = roleFollower
-		}
-	}
-
-	if grantVote && e.votedFor == nodeIDNil {
-		if err := e.vote(req.CandidateID); err != nil {
-			e.logger.Error("Vote candidate failed | req=%v | err=[%v]", req, err)
-			grantVote = false
-		}
-	}
-
-	resp := &pb.RequestVoteResp{
-		Term:        e.currentTerm,
-		VoteGranted: grantVote,
-	}
-
-	e.logger.Debug("RequestVote RPC response sent | req=%v | resp=%v | states=%v", req, resp, e)
-	return resp, nil
-}
-
 func (e *Engine) initPersistStates() error {
 
 	// init currentTerm
@@ -277,6 +223,69 @@ func (e *Engine) initLogs(filePath string) error {
 	return nil
 }
 
+func (e *Engine) String() string {
+	return fmt.Sprintf("[raftdir=%v | clusterSize=%v | nodeID=%v | currentTerm=%v | votedFor=%v | logSize=%v"+
+		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderID=%v]", e.raftdir,
+		e.clusterSize, e.nodeID, e.currentTerm, e.votedFor, len(e.logs)-1, e.commitIndex, e.lastApplied, e.nextIndex,
+		e.matchIndex, e.role, e.leaderID)
+}
+
+// Run starts Raft service on current node.
+func (e *Engine) Run() {
+	e.logger.Info("Raft engine started | states=%v", e)
+	for {
+		switch e.role {
+		case roleFollower:
+			e.follower()
+		case roleCandidate:
+			e.candidate()
+		case roleLeader:
+			e.leader()
+		default:
+			panic(fmt.Sprintf("Invalid raft role (this error most likely comes from internal raft implementation)"+
+				" | states=%v", e))
+		}
+		e.logger.Debug("Print raft states | states=%v", e)
+		time.Sleep(5 * time.Second) // TODO remove later
+	}
+}
+
+// RequestVoteHandler handles RequestVote RPC request.
+func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
+	grantVote := false
+
+	if req.Term >= e.currentTerm {
+		// TODO grant vote when logs at least up-to-date
+		grantVote = (e.votedFor == nodeIDNil || e.votedFor == req.CandidateID)
+		if req.Term > e.currentTerm {
+			e.role = roleFollower
+		}
+	}
+
+	if grantVote && e.votedFor == nodeIDNil {
+		if err := e.vote(req.CandidateID); err != nil {
+			e.logger.Error("Vote candidate failed | req=%v | err=[%v]", req, err)
+			grantVote = false
+		}
+	}
+
+	resp := &pb.RequestVoteResp{
+		Term:        e.currentTerm,
+		VoteGranted: grantVote,
+	}
+
+	e.logger.Debug("RequestVote handled | req=%v | resp=%v | states=%v", req, resp, e)
+	return resp, nil
+}
+
+// AppendEntriesHandler handles AppendEntries RPC request.
+func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
+	// TODO AppendEntries handler
+	resp := &pb.AppendEntriesResp{}
+	e.logger.Debug("AppendEntries handled | req=%v | resp=%v | states=%v", req, resp, e)
+	return resp, nil
+}
+
 func (e *Engine) follower() {
 	e.electionTimer.start()
 	select {
@@ -317,6 +326,7 @@ func (e *Engine) candidate() {
 		if suc {
 			e.leaderID = e.votedFor
 			e.role = roleLeader
+			e.logger.Info("New leader elected | states=%v", e)
 		}
 	}
 }
@@ -389,7 +399,7 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 
 		conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
 		if err != nil {
-			e.logger.Error("Connect Raft server failed | targetAddr=%v | states=%v | err=[%v]", targetAddr, e, err)
+			e.logger.Error("Connect raft server failed | targetAddr=%v | states=%v | err=[%v]", targetAddr, e, err)
 			votes <- false
 			return
 		}
@@ -405,11 +415,12 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 
 		resp, err := pb.NewRaftClient(conn).RequestVote(context.Background(), req)
 		if err != nil {
-			e.logger.Error("RequestVote RPC request failed | targetAddr=%v | states=%v | err=[%v]", targetAddr, e, err)
+			e.logger.Error("RequestVote failed | req=%v | targetAddr=%v | states=%v | err=[%v]",
+				req, targetAddr, e, err)
 			votes <- false
 			return
 		}
-		e.logger.Debug("RequestVote RPC sent | req=%v | resp=%v | targetAddr=%v | states=%v", req, resp, targetAddr, e)
+		e.logger.Debug("RequestVote sent | req=%v | resp=%v | targetAddr=%v | states=%v", req, resp, targetAddr, e)
 
 		if resp.GetTerm() > e.currentTerm {
 			e.role = roleFollower

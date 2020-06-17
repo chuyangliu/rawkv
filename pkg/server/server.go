@@ -34,7 +34,7 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel 
 	// create Raft engine
 	raftEngine, err := raft.NewEngine(rootdir, logLevel)
 	if err != nil {
-		return nil, fmt.Errorf("Create Raft engine failed | rootdir=%v | err=[%w]", rootdir, err)
+		return nil, fmt.Errorf("Create raft engine failed | rootdir=%v | err=[%w]", rootdir, err)
 	}
 
 	// instantiate
@@ -52,6 +52,34 @@ func (s *Server) Serve(storageAddr string, raftAddr string) error {
 	go s.serveRaft(raftAddr)
 	s.raftEngine.Run()
 	return nil
+}
+
+func (s *Server) serveStorage(addr string) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		s.logger.Error("Storage server listen failed | addr=%v | err=[%v]", addr, err)
+		return
+	}
+	svr := grpc.NewServer()
+	pb.RegisterStorageServer(svr, s)
+	s.logger.Info("Starting storage server | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
+	if err := svr.Serve(listener); err != nil {
+		s.logger.Error("Starting storage server failed | err=[%v]", err)
+	}
+}
+
+func (s *Server) serveRaft(addr string) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		s.logger.Error("Raft server listen failed | addr=%v | err=[%v]", addr, err)
+		return
+	}
+	svr := grpc.NewServer()
+	pb.RegisterRaftServer(svr, s)
+	s.logger.Info("Starting raft server | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
+	if err := svr.Serve(listener); err != nil {
+		s.logger.Error("Starting raft server failed | err=[%v]", err)
+	}
 }
 
 // -------------------------------
@@ -93,35 +121,5 @@ func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.R
 
 // AppendEntries invoked by leader to replicate log entries, also used as heartbeat.
 func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
-	s.logger.Debug("AppendEntries")
-	resp := &pb.AppendEntriesResp{}
-	return resp, nil
-}
-
-func (s *Server) serveStorage(addr string) {
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		s.logger.Error("Storage server listen failed | addr=%v | err=[%v]", addr, err)
-		return
-	}
-	svr := grpc.NewServer()
-	pb.RegisterStorageServer(svr, s)
-	s.logger.Info("Starting storage server | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
-	if err := svr.Serve(listener); err != nil {
-		s.logger.Error("Starting storage server failed | err=[%v]", err)
-	}
-}
-
-func (s *Server) serveRaft(addr string) {
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		s.logger.Error("Raft server listen failed | addr=%v | err=[%v]", addr, err)
-		return
-	}
-	svr := grpc.NewServer()
-	pb.RegisterRaftServer(svr, s)
-	s.logger.Info("Starting raft server | addr=%v | rootdir=%v", listener.Addr().String(), s.rootdir)
-	if err := svr.Serve(listener); err != nil {
-		s.logger.Error("Starting raft server failed | err=[%v]", err)
-	}
+	return s.raftEngine.AppendEntriesHandler(req)
 }
