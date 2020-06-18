@@ -6,6 +6,7 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/chuyangliu/rawkv/pkg/pb"
 	"github.com/chuyangliu/rawkv/pkg/store"
 )
 
@@ -22,7 +23,7 @@ type raftLog struct {
 	val   store.Value
 }
 
-func readLog(reader io.Reader) (*raftLog, error) {
+func newRaftLog(reader io.Reader) (*raftLog, error) {
 
 	index, err := readIndex(reader)
 	if err != nil {
@@ -138,4 +139,14 @@ func readValue(reader io.Reader, valLen store.KVLen) (store.Value, error) {
 		return "", fmt.Errorf("Read full failed | err=[%w]", err)
 	}
 	return store.Value(raw), nil
+}
+
+func (rl *raftLog) toLogEntry() *pb.AppendEntriesReq_LogEntry {
+	return &pb.AppendEntriesReq_LogEntry{
+		Index: rl.index,
+		Term:  rl.term,
+		Cmd:   uint32(rl.cmd),
+		Key:   []byte(rl.key),
+		Val:   []byte(rl.val),
+	}
 }

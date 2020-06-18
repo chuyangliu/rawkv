@@ -60,6 +60,12 @@ type Engine struct {
 
 	// election timer
 	electionTimer *raftTimer
+
+	// time interval (milliseconds) between two heartbeats (AppendEntries RPCs) sent from leader
+	heartbeatInterval int64
+
+	// channel to signal existence of leader
+	leaderFound chan bool
 }
 
 // NewEngine instantiates an Engine.
@@ -112,7 +118,10 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 		role:     roleFollower,
 		leaderID: nodeIDNil,
 
-		electionTimer: newRaftTimer(logLevel, 2000, 5000),
+		electionTimer:     newRaftTimer(logLevel, 2000, 5000),
+		heartbeatInterval: 1000,
+
+		leaderFound: make(chan bool),
 	}
 
 	// nextIndex starts at 1
@@ -210,7 +219,7 @@ func (e *Engine) initLogs(filePath string) error {
 	e.logs = []*raftLog{{index: 0, term: 0}}
 
 	for {
-		log, err := readLog(file)
+		log, err := newRaftLog(file)
 		if err != nil {
 			return fmt.Errorf("Read log failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 		}
@@ -259,6 +268,7 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 		grantVote = (e.votedFor == nodeIDNil || e.votedFor == req.CandidateID)
 		if req.Term > e.currentTerm {
 			e.role = roleFollower
+			e.currentTerm = req.Term
 		}
 	}
 
@@ -280,23 +290,39 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 
 // AppendEntriesHandler handles AppendEntries RPC request.
 func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
-	// TODO AppendEntries handler
-	resp := &pb.AppendEntriesResp{}
+	suc := false
+
+	if req.Term >= e.currentTerm {
+		// TODO handle AppendEntries req
+		suc = true
+		e.role = roleFollower
+		e.currentTerm = req.Term
+		e.leaderID = req.LeaderID
+		e.leaderFound <- true
+	}
+
+	resp := &pb.AppendEntriesResp{
+		Term:    e.currentTerm,
+		Success: suc,
+	}
+
 	e.logger.Debug("AppendEntries handled | req=%v | resp=%v | states=%v", req, resp, e)
 	return resp, nil
 }
 
 func (e *Engine) follower() {
+	// TODO reset fields
 	e.electionTimer.start()
 	select {
 	case <-e.electionTimer.timeout():
 		e.role = roleCandidate
-		return
-		// TODO wait append entry channel
+	case <-e.leaderFound:
+		e.electionTimer.stop()
 	}
 }
 
 func (e *Engine) candidate() {
+	// TODO reset fields
 
 	// increate current term
 	if err := e.incrCurrentTerm(); err != nil {
@@ -441,5 +467,64 @@ func (e *Engine) requestVote(targetAddr string, req *pb.RequestVoteReq) (*pb.Req
 }
 
 func (e *Engine) leader() {
-	// TODO
+	// TODO reset fields
+	for i := int32(0); i < e.clusterSize; i++ {
+		if i != e.nodeID {
+			e.appendEntriesAsync(i)
+		}
+	}
+	// never end leader loop
+	<-make(chan bool)
+}
+
+func (e *Engine) appendEntriesAsync(targetID int32) {
+	go func() {
+		for {
+			targetAddr, err := e.nodeProvider.RaftAddr(targetID)
+			if err != nil {
+				e.logger.Error("Get node address failed | targetID=%v | states=%v | err=[%v]", targetID, e, err)
+				return
+			}
+
+			prevLog := e.logs[e.nextIndex[targetID]-1]
+			req := &pb.AppendEntriesReq{
+				Term:         e.currentTerm,
+				LeaderID:     e.nodeID,
+				PrevLogIndex: prevLog.index,
+				PrevLogTerm:  prevLog.term,
+				Entries:      make([]*pb.AppendEntriesReq_LogEntry, 0),
+				LeaderCommit: e.commitIndex,
+			}
+
+			resp, err := e.appendEntries(targetAddr, req)
+			if err != nil {
+				e.logger.Error("AppendEntries failed | targetAddr=%v | req=%v | states=%v | err=[%v]",
+					targetAddr, req, e, err)
+				return
+			}
+			e.logger.Debug("AppendEntries sent | targetAddr=%v | req=%v | resp=%v | states=%v",
+				targetAddr, req, resp, e)
+
+			// TODO handle AppendEntries resp
+
+			time.Sleep(time.Duration(e.heartbeatInterval) * time.Millisecond)
+		}
+	}()
+}
+
+func (e *Engine) appendEntries(targetAddr string, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
+
+	conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
+	if err != nil {
+		return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | states=%v | err=[%w]", targetAddr, e, err)
+	}
+	defer conn.Close()
+
+	resp, err := pb.NewRaftClient(conn).AppendEntries(context.Background(), req)
+	if err != nil {
+		return nil, fmt.Errorf("AppendEntries RPC failed | targetAddr=%v | req=%v | states=%v | err=[%v]",
+			targetAddr, req, e, err)
+	}
+
+	return resp, nil
 }

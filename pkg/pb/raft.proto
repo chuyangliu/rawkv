@@ -22,7 +22,22 @@ message RequestVoteResp {
 }
 
 message AppendEntriesReq {
+    message LogEntry {
+        uint64 index = 1;
+        uint64 term = 2;
+        uint32 cmd = 3;
+        bytes key = 4;
+        bytes val = 5;
+    }
+    uint64 term = 1;
+    int32 leaderID = 2;
+    uint64 prevLogIndex = 3;
+    uint64 prevLogTerm = 4;
+    repeated LogEntry entries = 5;
+    uint64 leaderCommit = 6;
 }
 
 message AppendEntriesResp {
+    uint64 term = 1;
+    bool success = 2;
 }
