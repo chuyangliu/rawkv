@@ -31,23 +31,24 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel 
 		return nil, fmt.Errorf("Create root directory failed | rootdir=%v | err=[%w]", rootdir, err)
 	}
 
-	// create raft engine
-	raftEngine, err := raft.NewEngine(rootdir, logLevel)
-	if err != nil {
-		return nil, fmt.Errorf("Create raft engine failed | rootdir=%v | err=[%w]", rootdir, err)
-	}
-
-	// instantiate
 	return &Server{
 		rootdir:    rootdir,
 		shardMgr:   shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
-		raftEngine: raftEngine,
+		raftEngine: nil,
 		logger:     logging.New(logLevel),
 	}, nil
 }
 
 // Serve runs the server instance and start handling incoming requests.
 func (s *Server) Serve(storageAddr string, raftAddr string) error {
+
+	// create raft engine
+	var err error
+	s.raftEngine, err = raft.NewEngine(s.rootdir, s.applyRaftLog, s.logger.Level())
+	if err != nil {
+		return fmt.Errorf("Create raft engine failed | rootdir=%v | err=[%w]", s.rootdir, err)
+	}
+
 	go s.serveStorage(storageAddr)
 	go s.serveRaft(raftAddr)
 	s.raftEngine.Run()
@@ -80,6 +81,14 @@ func (s *Server) serveRaft(addr string) {
 	if err := svr.Serve(listener); err != nil {
 		s.logger.Error("Starting raft server failed | err=[%v]", err)
 	}
+}
+
+func (s *Server) applyRaftLog(cmd uint32, rawKey []byte, rawVal []byte) error {
+	key := store.Key(rawKey)
+	val := store.Value(rawVal)
+	// TODO
+	s.logger.Warn("applyRaftLog() not implemented | cmd=%v | key=%v | val=%v", cmd, key, val)
+	return nil
 }
 
 // -------------------------------

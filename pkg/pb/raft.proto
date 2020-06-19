@@ -33,7 +33,7 @@ message AppendEntriesReq {
     int32 leaderID = 2;
     uint64 prevLogIndex = 3;
     uint64 prevLogTerm = 4;
-    repeated LogEntry entries = 5;
+    LogEntry entry = 5;
     uint64 leaderCommit = 6;
 }
 

@@ -11,19 +11,23 @@ import (
 )
 
 const (
-	cmdPut uint16 = 0
-	cmdDel uint16 = 1
+	// CmdPut stores enum value of put operation.
+	CmdPut uint32 = 0
+	// CmdDel stores enum value of delete operation.
+	CmdDel uint32 = 1
 )
 
 type raftLog struct {
-	index uint64
-	term  uint64
-	cmd   uint16
-	key   store.Key
-	val   store.Value
+	entry *pb.AppendEntriesReq_LogEntry
 }
 
-func newRaftLog(reader io.Reader) (*raftLog, error) {
+func newRaftLog(entry *pb.AppendEntriesReq_LogEntry) *raftLog {
+	return &raftLog{
+		entry: entry,
+	}
+}
+
+func newRaftLogFromFile(reader io.Reader) (*raftLog, error) {
 
 	index, err := readIndex(reader)
 	if err != nil {
@@ -54,13 +58,15 @@ func newRaftLog(reader io.Reader) (*raftLog, error) {
 	}
 
 	log := &raftLog{
-		index: index,
-		term:  term,
-		cmd:   cmd,
-		key:   key,
+		entry: &pb.AppendEntriesReq_LogEntry{
+			Index: index,
+			Term:  term,
+			Cmd:   cmd,
+			Key:   []byte(key),
+		},
 	}
 
-	if cmd == cmdPut {
+	if cmd == CmdPut {
 		valLen, err := readKVLen(reader)
 		if err != nil {
 			return nil, fmt.Errorf("Read log value length failed | err=[%w]", err)
@@ -71,7 +77,7 @@ func newRaftLog(reader io.Reader) (*raftLog, error) {
 			return nil, fmt.Errorf("Read log value failed | err=[%w]", err)
 		}
 
-		log.val = val
+		log.entry.Val = []byte(val)
 	}
 
 	return log, nil
@@ -101,14 +107,14 @@ func readTerm(reader io.Reader) (uint64, error) {
 	return val, nil
 }
 
-func readCmd(reader io.Reader) (uint16, error) {
-	raw := make([]byte, unsafe.Sizeof(uint16(0)))
+func readCmd(reader io.Reader) (uint32, error) {
+	raw := make([]byte, unsafe.Sizeof(uint32(0)))
 	if _, err := io.ReadFull(reader, raw); err != nil {
 		return 0, fmt.Errorf("Read full failed | err=[%w]", err)
 	}
-	val := uint16(0)
+	val := uint32(0)
 	for i, b := range raw {
-		val |= uint16(b) << (8 * i)
+		val |= uint32(b) << (8 * i)
 	}
 	return val, nil
 }
@@ -141,12 +147,7 @@ func readValue(reader io.Reader, valLen store.KVLen) (store.Value, error) {
 	return store.Value(raw), nil
 }
 
-func (rl *raftLog) toLogEntry() *pb.AppendEntriesReq_LogEntry {
-	return &pb.AppendEntriesReq_LogEntry{
-		Index: rl.index,
-		Term:  rl.term,
-		Cmd:   uint32(rl.cmd),
-		Key:   []byte(rl.key),
-		Val:   []byte(rl.val),
-	}
+func (rl *raftLog) String() string {
+	return fmt.Sprintf("[index=%v | term=%v | cmd=%v | key=%v | val=%v]",
+		rl.entry.Index, rl.entry.Term, rl.entry.Cmd, rl.entry.Key, rl.entry.Val)
 }
