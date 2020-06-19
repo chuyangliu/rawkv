@@ -31,7 +31,7 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel 
 		return nil, fmt.Errorf("Create root directory failed | rootdir=%v | err=[%w]", rootdir, err)
 	}
 
-	// create Raft engine
+	// create raft engine
 	raftEngine, err := raft.NewEngine(rootdir, logLevel)
 	if err != nil {
 		return nil, fmt.Errorf("Create raft engine failed | rootdir=%v | err=[%w]", rootdir, err)

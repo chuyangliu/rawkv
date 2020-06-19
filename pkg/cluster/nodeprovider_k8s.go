@@ -101,7 +101,7 @@ func (p *K8SNodeProvider) ID() (int32, error) {
 	return p.id, nil
 }
 
-// RaftAddr returns the network address of node (with the given id) providing Raft service.
+// RaftAddr returns the network address of node (with the given id) providing raft service.
 func (p *K8SNodeProvider) RaftAddr(id int32) (string, error) {
 	return fmt.Sprintf(p.addrFmt, id, p.raftPort), nil
 }

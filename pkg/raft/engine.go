@@ -29,7 +29,7 @@ const (
 	nodeIDNil int32 = -1
 )
 
-// Engine manages Raft states and operations.
+// Engine manages raft states and operations.
 type Engine struct {
 	raftdir string
 	logger  *logging.Logger
@@ -71,7 +71,7 @@ type Engine struct {
 // NewEngine instantiates an Engine.
 func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 
-	// create directory to store Raft states
+	// create directory to store raft states
 	raftdir := path.Join(rootdir, dirRaft)
 	if err := os.MkdirAll(raftdir, 0777); err != nil {
 		return nil, fmt.Errorf("Create root directory failed | raftdir=%v | err=[%w]", raftdir, err)
@@ -83,7 +83,7 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 		return nil, fmt.Errorf("Create Kubernetes node provider failed | raftdir=%v | err=[%w]", raftdir, err)
 	}
 
-	// get number of Raft nodes in the cluster
+	// get number of raft nodes in the cluster
 	clusterSize, err := nodeProvider.Size()
 	if err != nil {
 		return nil, fmt.Errorf("Query cluster size failed | raftdir=%v | err=[%w]", raftdir, err)
@@ -129,10 +129,9 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 		engine.nextIndex[i] = 1
 	}
 
-	// init Raft persistent states
+	// init raft persistent states
 	if err := engine.initPersistStates(); err != nil {
-		return nil, fmt.Errorf("Initialize Raft persistent states failed | raftdir=%v | clusterSize=%v | nodeID=%v"+
-			" | err=[%w]", raftdir, clusterSize, nodeID, err)
+		return nil, fmt.Errorf("Initialize raft persistent states failed | err=[%w]", err)
 	}
 
 	return engine, nil
@@ -140,22 +139,16 @@ func NewEngine(rootdir string, logLevel int) (*Engine, error) {
 
 func (e *Engine) initPersistStates() error {
 
-	// init currentTerm
-	filePath := path.Join(e.raftdir, fileCurrentTerm)
-	if err := e.initCurrentTerm(filePath); err != nil {
-		return fmt.Errorf("Initialize currentTerm failed | filePath=%v | states=%v | err=[%w]", filePath, e, err)
+	if err := e.initCurrentTerm(path.Join(e.raftdir, fileCurrentTerm)); err != nil {
+		return fmt.Errorf("Initialize currentTerm failed | err=[%w]", err)
 	}
 
-	// init votedFor
-	filePath = path.Join(e.raftdir, fileVotedFor)
-	if err := e.initVotedFor(filePath); err != nil {
-		return fmt.Errorf("Initialize votedFor failed | filePath=%v | states=%v | err=[%w]", filePath, e, err)
+	if err := e.initVotedFor(path.Join(e.raftdir, fileVotedFor)); err != nil {
+		return fmt.Errorf("Initialize votedFor failed | err=[%w]", err)
 	}
 
-	// init logs
-	filePath = path.Join(e.raftdir, fileLogs)
-	if err := e.initLogs(filePath); err != nil {
-		return fmt.Errorf("Initialize logs failed | filePath=%v | states=%v | err=[%w]", filePath, e, err)
+	if err := e.initLogs(path.Join(e.raftdir, fileLogs)); err != nil {
+		return fmt.Errorf("Initialize logs failed | err=[%w]", err)
 	}
 
 	return nil
@@ -223,7 +216,7 @@ func (e *Engine) initLogs(filePath string) error {
 		if err != nil {
 			return fmt.Errorf("Read log failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 		}
-		if log == nil {
+		if log == nil { // EOF
 			break
 		}
 		e.logs = append(e.logs, log)
@@ -239,7 +232,7 @@ func (e *Engine) String() string {
 		e.matchIndex, e.role, e.leaderID)
 }
 
-// Run starts Raft service on current node.
+// Run starts raft service on current node.
 func (e *Engine) Run() {
 	e.logger.Info("Raft engine started | states=%v", e)
 	for {
@@ -259,7 +252,7 @@ func (e *Engine) Run() {
 	}
 }
 
-// RequestVoteHandler handles RequestVote RPC request.
+// RequestVoteHandler handles received RequestVote RPC.
 func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
 	grantVote := false
 
@@ -288,7 +281,7 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 	return resp, nil
 }
 
-// AppendEntriesHandler handles AppendEntries RPC request.
+// AppendEntriesHandler handles received AppendEntries RPC.
 func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
 	suc := false
 
@@ -326,13 +319,13 @@ func (e *Engine) candidate() {
 
 	// increate current term
 	if err := e.incrCurrentTerm(); err != nil {
-		e.logger.Error("Increase current term failed | states=%v | err=[%v]", e, err)
+		e.logger.Error("Increase current term failed | err=[%v]", err)
 		return
 	}
 
 	// vote for self
 	if err := e.vote(e.nodeID); err != nil {
-		e.logger.Error("Vote for self failed | states=%v | err=[%v]", e, err)
+		e.logger.Error("Vote for self failed | err=[%v]", err)
 		return
 	}
 
@@ -401,15 +394,14 @@ func (e *Engine) requestVotesAsync(majority chan bool) {
 			}
 		}
 
-		numGranted := int32(0)
-		for i := int32(0); i < e.clusterSize-1; i++ {
-			if <-votes {
-				numGranted++
+		numGrant := int32(1) // start at 1 since candidate votes for self before requesting votes to others
+		for i := int32(0); i < e.clusterSize; i++ {
+			if i != e.nodeID && <-votes {
+				numGrant++
 			}
 		}
 
-		// no need to add 1 when counting majority since current node votes for self in advance
-		majority <- (numGranted >= e.clusterSize/2)
+		majority <- (numGrant > e.clusterSize/2)
 	}()
 }
 
@@ -433,8 +425,7 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 
 		resp, err := e.requestVote(targetAddr, req)
 		if err != nil {
-			e.logger.Error("RequestVote failed | targetAddr=%v | req=%v | states=%v | err=[%v]",
-				targetAddr, req, e, err)
+			e.logger.Error("RequestVote failed | err=[%v]", err)
 			votes <- false
 			return
 		}
@@ -453,7 +444,8 @@ func (e *Engine) requestVote(targetAddr string, req *pb.RequestVoteReq) (*pb.Req
 
 	conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
 	if err != nil {
-		return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | states=%v | err=[%w]", targetAddr, e, err)
+		return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | req=%v | states=%v | err=[%w]",
+			targetAddr, req, e, err)
 	}
 	defer conn.Close()
 
@@ -498,8 +490,7 @@ func (e *Engine) appendEntriesAsync(targetID int32) {
 
 			resp, err := e.appendEntries(targetAddr, req)
 			if err != nil {
-				e.logger.Error("AppendEntries failed | targetAddr=%v | req=%v | states=%v | err=[%v]",
-					targetAddr, req, e, err)
+				e.logger.Error("AppendEntries failed | err=[%v]", err)
 				return
 			}
 			e.logger.Debug("AppendEntries sent | targetAddr=%v | req=%v | resp=%v | states=%v",
@@ -516,7 +507,8 @@ func (e *Engine) appendEntries(targetAddr string, req *pb.AppendEntriesReq) (*pb
 
 	conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
 	if err != nil {
-		return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | states=%v | err=[%w]", targetAddr, e, err)
+		return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | req=%v | states=%v | err=[%w]",
+			targetAddr, req, e, err)
 	}
 	defer conn.Close()
 
