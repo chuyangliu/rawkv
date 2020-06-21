@@ -331,10 +331,10 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 
 func (e *Engine) atLeastUpToDate(lastLogIndex uint64, lastLogTerm uint64) bool {
 	lastLog := e.logs[len(e.logs)-1]
-	if lastLogTerm == lastLog.entry.Term {
-		return lastLogIndex >= lastLog.entry.Index
+	if lastLogTerm == lastLog.entry.GetTerm() {
+		return lastLogIndex >= lastLog.entry.GetIndex()
 	}
-	return lastLogTerm >= lastLog.entry.Term
+	return lastLogTerm >= lastLog.entry.GetTerm()
 }
 
 // AppendEntriesHandler handles received AppendEntries RPC.
@@ -366,26 +366,30 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 	e.cancelElectionTimeout <- true
 
 	prevLogIndex := req.GetPrevLogIndex()
-	if prevLogIndex >= uint64(len(e.logs)) || e.logs[prevLogIndex].entry.Term != req.GetPrevLogTerm() {
+	if prevLogIndex >= uint64(len(e.logs)) || e.logs[prevLogIndex].entry.GetTerm() != req.GetPrevLogTerm() {
 		e.logger.Info("AppendEntries logs did not match | req=%v | states=%v", req, e)
 		return resp, nil
 	}
 
-	// TODO update logs on disk
 	index := prevLogIndex + 1
 	for _, entry := range req.GetEntries() {
-		if entry.Index != index {
+		if entry.GetIndex() != index {
 			panic(fmt.Sprintf("Incorrect AppendEntries log index (error most likely caused by incorrect raft"+
 				" implementation) | req=%v | states=%v", req, e))
 		}
 		if index >= uint64(len(e.logs)) {
-			e.logs = append(e.logs, newRaftLog(entry))
-		} else {
-			if entry.Term != e.logs[index].entry.Term {
-				// conflict entry (same index but different terms), delete the existing entry and all that follow it
-				e.logs = e.logs[:index+1]
+			if err := e.appendLog(newRaftLog(entry)); err != nil {
+				e.logger.Error("Append log failed | err=[%v]", err)
+				return resp, nil
 			}
-			e.logs[index] = newRaftLog(entry)
+		} else {
+			if entry.GetTerm() != e.logs[index].entry.GetTerm() {
+				// conflict entry (same index but different terms), delete the existing entry and all that follow it
+				if err := e.truncateAndAppendLog(newRaftLog(entry)); err != nil {
+					e.logger.Error("Truncate and append log failed | err=[%v]", err)
+					return resp, nil
+				}
+			}
 		}
 		index++
 	}
@@ -401,6 +405,18 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 	resp.Success = true
 	e.logger.Debug("AppendEntries handled | req=%v | resp=%v | states=%v", req, resp, e)
 	return resp, nil
+}
+
+func (e *Engine) appendLog(log *raftLog) error {
+	// TODO update logs on disk
+	e.logs = append(e.logs, log)
+	return nil
+}
+
+func (e *Engine) truncateAndAppendLog(log *raftLog) error {
+	// TODO update logs on disk
+	e.logs = append(e.logs[:log.entry.GetIndex()], log)
+	return nil
 }
 
 func (e *Engine) follower() {
@@ -507,8 +523,8 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 		req := &pb.RequestVoteReq{
 			Term:         e.currentTerm,
 			CandidateID:  e.nodeID,
-			LastLogIndex: lastLog.entry.Index,
-			LastLogTerm:  lastLog.entry.Term,
+			LastLogIndex: lastLog.entry.GetIndex(),
+			LastLogTerm:  lastLog.entry.GetTerm(),
 		}
 
 		resp, err := e.clients[targetID].RequestVote(context.Background(), req)
@@ -551,8 +567,8 @@ func (e *Engine) appendEntriesAsync(targetID int32, exits chan bool) {
 			req := &pb.AppendEntriesReq{
 				Term:         e.currentTerm,
 				LeaderID:     e.nodeID,
-				PrevLogIndex: prevLog.entry.Index,
-				PrevLogTerm:  prevLog.entry.Term,
+				PrevLogIndex: prevLog.entry.GetIndex(),
+				PrevLogTerm:  prevLog.entry.GetTerm(),
 				Entries:      make([]*pb.AppendEntriesReq_LogEntry, 0),
 				LeaderCommit: e.commitIndex,
 			}
@@ -595,7 +611,7 @@ func (e *Engine) appendEntriesAsync(targetID int32, exits chan bool) {
 }
 
 func (e *Engine) commit(logIndex uint64) error {
-	if logIndex > e.commitIndex && e.logs[logIndex].entry.Term == e.currentTerm {
+	if logIndex > e.commitIndex && e.logs[logIndex].entry.GetTerm() == e.currentTerm {
 		numMatch := int32(1) // log[logIndex] already replicated on current node
 		for id := int32(0); id < e.clusterSize; id++ {
 			if id != e.nodeID && e.matchIndex[id] >= logIndex {

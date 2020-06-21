@@ -149,5 +149,5 @@ func readValue(reader io.Reader, valLen store.KVLen) (store.Value, error) {
 
 func (rl *raftLog) String() string {
 	return fmt.Sprintf("[index=%v | term=%v | cmd=%v | key=%v | val=%v]",
-		rl.entry.Index, rl.entry.Term, rl.entry.Cmd, rl.entry.Key, rl.entry.Val)
+		rl.entry.GetIndex(), rl.entry.GetTerm(), rl.entry.GetCmd(), rl.entry.GetKey(), rl.entry.GetVal())
 }
