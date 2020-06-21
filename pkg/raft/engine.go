@@ -408,13 +408,53 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 }
 
 func (e *Engine) appendLog(log *raftLog) error {
-	// TODO update logs on disk
+
+	filePath := path.Join(e.raftdir, fileLogs)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		return fmt.Errorf("Open logs file failed | log=%v | path=%v | states=%v | err=[%w]", log, filePath, e, err)
+	}
+	defer file.Close()
+
+	// append
+	if err := log.write(file); err != nil {
+		return fmt.Errorf("Write log file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
+	}
+
 	e.logs = append(e.logs, log)
 	return nil
 }
 
 func (e *Engine) truncateAndAppendLog(log *raftLog) error {
-	// TODO update logs on disk
+
+	filePath := path.Join(e.raftdir, fileLogs)
+	file, err := os.OpenFile(filePath, os.O_WRONLY, 0666)
+	if err != nil {
+		return fmt.Errorf("Open logs file failed | log=%v | path=%v | states=%v | err=[%w]", log, filePath, e, err)
+	}
+	defer file.Close()
+
+	// compute file size to retain after truncate
+	size := int64(0)
+	for i := uint64(1); i < log.entry.GetIndex(); i++ {
+		size += e.logs[i].size()
+	}
+
+	// truncate
+	if err := file.Truncate(size); err != nil {
+		return fmt.Errorf("Truncate log file failed | log=%v | path=%v | states=%v | err=[%w]", log, filePath, e, err)
+	}
+
+	// seek to file end
+	if _, err := file.Seek(0, io.SeekEnd); err != nil {
+		return fmt.Errorf("Seek log file failed | log=%v | path=%v | states=%v | err=[%w]", log, filePath, e, err)
+	}
+
+	// append
+	if err := log.write(file); err != nil {
+		return fmt.Errorf("Write log file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
+	}
+
 	e.logs = append(e.logs[:log.entry.GetIndex()], log)
 	return nil
 }
