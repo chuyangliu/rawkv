@@ -42,6 +42,7 @@ type Engine struct {
 	nodeProvider cluster.NodeProvider
 	clusterSize  int32
 	nodeID       int32
+	clients      []pb.RaftClient
 
 	// persistent state on all servers
 	currentTerm uint64
@@ -104,6 +105,13 @@ func NewEngine(rootdir string, applyLog ApplyLogFunc, logLevel int) (*Engine, er
 			raftdir, clusterSize, err)
 	}
 
+	// establish grpc connections with other raft nodes in the cluster
+	clients, err := createRaftClients(nodeProvider, clusterSize, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("Create raft clients failed | raftdir=%v | clusterSize=%v | nodeID=%v | err=[%w]",
+			raftdir, clusterSize, nodeID, err)
+	}
+
 	// instantiate
 	engine := &Engine{
 		raftdir:  raftdir,
@@ -113,6 +121,7 @@ func NewEngine(rootdir string, applyLog ApplyLogFunc, logLevel int) (*Engine, er
 		nodeProvider: nodeProvider,
 		clusterSize:  clusterSize,
 		nodeID:       nodeID,
+		clients:      clients,
 
 		commitIndex: 0,
 		lastApplied: 0,
@@ -140,6 +149,31 @@ func NewEngine(rootdir string, applyLog ApplyLogFunc, logLevel int) (*Engine, er
 	}
 
 	return engine, nil
+}
+
+func createRaftClients(nodeProvider cluster.NodeProvider, clusterSize int32, nodeID int32) ([]pb.RaftClient, error) {
+	clients := make([]pb.RaftClient, clusterSize)
+
+	for id := int32(0); id < clusterSize; id++ {
+		if id != nodeID {
+
+			targetAddr, err := nodeProvider.RaftAddr(id)
+			if err != nil {
+				return nil, fmt.Errorf("Get node address failed | targetID=%v | clusterSize=%v | nodeID=%v | err=[%w]",
+					id, clusterSize, nodeID, err)
+			}
+
+			conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
+			if err != nil {
+				return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | clusterSize=%v | nodeID=%v"+
+					" | err=[%w]", targetAddr, clusterSize, nodeID, err)
+			}
+
+			clients[id] = pb.NewRaftClient(conn)
+		}
+	}
+
+	return clients, nil
 }
 
 func (e *Engine) initPersistStates() error {
@@ -236,9 +270,9 @@ func (e *Engine) initLogs(filePath string) error {
 }
 
 func (e *Engine) String() string {
-	return fmt.Sprintf("[raftdir=%v | clusterSize=%v | nodeID=%v | currentTerm=%v | votedFor=%v | logSize=%v"+
+	return fmt.Sprintf("[raftdir=%v | clusterSize=%v | nodeID=%v | currentTerm=%v | votedFor=%v | logs=%v"+
 		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderID=%v]", e.raftdir,
-		e.clusterSize, e.nodeID, e.currentTerm, e.votedFor, len(e.logs)-1, e.commitIndex, e.lastApplied, e.nextIndex,
+		e.clusterSize, e.nodeID, e.currentTerm, e.votedFor, e.logs, e.commitIndex, e.lastApplied, e.nextIndex,
 		e.matchIndex, e.role, e.leaderID)
 }
 
@@ -254,11 +288,10 @@ func (e *Engine) Run() {
 		case roleLeader:
 			e.leader()
 		default:
-			panic(fmt.Sprintf("Invalid raft role (this error most likely comes from internal raft implementation)"+
+			panic(fmt.Sprintf("Invalid raft role (error most likely caused by incorrect raft implementation)"+
 				" | states=%v", e))
 		}
 		e.logger.Debug("Print raft states | states=%v", e)
-		time.Sleep(5 * time.Second) // TODO remove later
 	}
 }
 
@@ -271,6 +304,7 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 	}
 
 	if req.GetTerm() < e.currentTerm {
+		e.logger.Info("RequestVote received from older term | req=%v | states=%v", req, e)
 		return resp, nil
 	}
 
@@ -312,25 +346,48 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 	}
 
 	if req.GetTerm() < e.currentTerm {
+		e.logger.Info("AppendEntries received from older term | req=%v | states=%v", req, e)
 		return resp, nil
 	}
 
-	if req.GetTerm() > e.currentTerm {
+	if req.GetTerm() > e.currentTerm || e.role == roleCandidate {
 		if err := e.convertToFollower(req.GetTerm()); err != nil {
 			e.logger.Error("Convert to follower failed | err=[%v]", err)
 			return resp, nil
 		}
 	}
 
+	if e.role == roleLeader {
+		panic(fmt.Sprintf("More than one leader exists in the cluster (error most likely caused by incorrect raft"+
+			" implementation) | req=%v | states=%v", req, e))
+	}
+
+	e.leaderID = req.GetLeaderID()
+	e.cancelElectionTimeout <- true
+
 	prevLogIndex := req.GetPrevLogIndex()
 	if prevLogIndex >= uint64(len(e.logs)) || e.logs[prevLogIndex].entry.Term != req.GetPrevLogTerm() {
+		e.logger.Info("AppendEntries logs did not match | req=%v | states=%v", req, e)
 		return resp, nil
 	}
 
-	if prevLogIndex == uint64(len(e.logs)-1) {
-		e.logs = append(e.logs, newRaftLog(req.Entry))
-	} else {
-		e.logs[prevLogIndex+1] = newRaftLog(req.Entry)
+	// TODO update logs on disk
+	index := prevLogIndex + 1
+	for _, entry := range req.GetEntries() {
+		if entry.Index != index {
+			panic(fmt.Sprintf("Incorrect AppendEntries log index (error most likely caused by incorrect raft"+
+				" implementation) | req=%v | states=%v", req, e))
+		}
+		if index >= uint64(len(e.logs)) {
+			e.logs = append(e.logs, newRaftLog(entry))
+		} else {
+			if entry.Term != e.logs[index].entry.Term {
+				// conflict entry (same index but different terms), delete the existing entry and all that follow it
+				e.logs = e.logs[:index+1]
+			}
+			e.logs[index] = newRaftLog(entry)
+		}
+		index++
 	}
 
 	if req.GetLeaderCommit() > e.commitIndex {
@@ -376,11 +433,14 @@ func (e *Engine) candidate() {
 	case <-e.electionTimer.timeout():
 		return
 	case suc := <-majority:
-		e.electionTimer.stop()
 		if suc {
+			e.electionTimer.stop()
 			e.role = roleLeader
 			e.leaderID = e.nodeID
 			e.logger.Info("New leader elected | states=%v", e)
+		} else {
+			// not receive majority, wait timeout before starting new election
+			<-e.electionTimer.timeout()
 		}
 	}
 }
@@ -423,15 +483,15 @@ func (e *Engine) requestVotesAsync(majority chan bool) {
 	go func() {
 
 		votes := make(chan bool)
-		for i := int32(0); i < e.clusterSize; i++ {
-			if i != e.nodeID {
-				e.requestVoteAsync(i, votes)
+		for id := int32(0); id < e.clusterSize; id++ {
+			if id != e.nodeID {
+				e.requestVoteAsync(id, votes)
 			}
 		}
 
 		numGrant := int32(1) // start at 1 since candidate votes for self before requesting votes to others
-		for i := int32(0); i < e.clusterSize; i++ {
-			if i != e.nodeID && <-votes {
+		for id := int32(0); id < e.clusterSize; id++ {
+			if id != e.nodeID && <-votes {
 				numGrant++
 			}
 		}
@@ -443,13 +503,6 @@ func (e *Engine) requestVotesAsync(majority chan bool) {
 func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 	go func() {
 
-		targetAddr, err := e.nodeProvider.RaftAddr(targetID)
-		if err != nil {
-			e.logger.Error("Get node address failed | targetID=%v | states=%v | err=[%v]", targetID, e, err)
-			votes <- false
-			return
-		}
-
 		lastLog := e.logs[len(e.logs)-1]
 		req := &pb.RequestVoteReq{
 			Term:         e.currentTerm,
@@ -458,13 +511,13 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 			LastLogTerm:  lastLog.entry.Term,
 		}
 
-		resp, err := e.requestVote(targetAddr, req)
+		resp, err := e.clients[targetID].RequestVote(context.Background(), req)
 		if err != nil {
-			e.logger.Error("RequestVote failed | err=[%v]", err)
+			e.logger.Error("RequestVote failed | states=%v | err=[%v]", e, err)
 			votes <- false
 			return
 		}
-		e.logger.Debug("RequestVote sent | targetAddr=%v | req=%v | resp=%v | states=%v", targetAddr, req, resp, e)
+		e.logger.Debug("RequestVote sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
 
 		if resp.GetTerm() > e.currentTerm {
 			if err := e.convertToFollower(resp.GetTerm()); err != nil {
@@ -478,13 +531,13 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 
 func (e *Engine) leader() {
 	exits := make(chan bool)
-	for i := int32(0); i < e.clusterSize; i++ {
-		if i != e.nodeID {
-			e.appendEntriesAsync(i, exits)
+	for id := int32(0); id < e.clusterSize; id++ {
+		if id != e.nodeID {
+			e.appendEntriesAsync(id, exits)
 		}
 	}
-	for i := int32(0); i < e.clusterSize; i++ {
-		if i != e.nodeID {
+	for id := int32(0); id < e.clusterSize; id++ {
+		if id != e.nodeID {
 			<-exits
 		}
 	}
@@ -493,12 +546,6 @@ func (e *Engine) leader() {
 func (e *Engine) appendEntriesAsync(targetID int32, exits chan bool) {
 	go func() {
 		for e.role == roleLeader {
-			targetAddr, err := e.nodeProvider.RaftAddr(targetID)
-			if err != nil {
-				e.logger.Error("Get node address failed | targetID=%v | states=%v | err=[%v]", targetID, e, err)
-				return
-			}
-
 			nextIndex := e.nextIndex[targetID]
 			prevLog := e.logs[nextIndex-1]
 			req := &pb.AppendEntriesReq{
@@ -506,22 +553,21 @@ func (e *Engine) appendEntriesAsync(targetID int32, exits chan bool) {
 				LeaderID:     e.nodeID,
 				PrevLogIndex: prevLog.entry.Index,
 				PrevLogTerm:  prevLog.entry.Term,
-				Entry:        nil,
+				Entries:      make([]*pb.AppendEntriesReq_LogEntry, 0),
 				LeaderCommit: e.commitIndex,
 			}
 
 			lastLogIndex := uint64(len(e.logs) - 1)
-			if lastLogIndex >= nextIndex {
-				req.Entry = e.logs[nextIndex].entry
+			for ; nextIndex <= lastLogIndex; nextIndex++ {
+				req.Entries = append(req.Entries, e.logs[nextIndex].entry)
 			}
 
-			resp, err := e.appendEntries(targetAddr, req)
+			resp, err := e.clients[targetID].AppendEntries(context.Background(), req)
 			if err != nil {
-				e.logger.Error("AppendEntries failed | err=[%v]", err)
+				e.logger.Error("AppendEntries failed | states=%v | err=[%v]", e, err)
 				return
 			}
-			e.logger.Debug("AppendEntries sent | targetAddr=%v | req=%v | resp=%v | states=%v",
-				targetAddr, req, resp, e)
+			e.logger.Debug("AppendEntries sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
 
 			if resp.GetTerm() > e.currentTerm {
 				if err := e.convertToFollower(resp.GetTerm()); err != nil {
@@ -530,7 +576,7 @@ func (e *Engine) appendEntriesAsync(targetID int32, exits chan bool) {
 				break
 			}
 
-			if req.Entry != nil {
+			if len(req.Entries) > 0 {
 				if resp.GetSuccess() {
 					e.matchIndex[targetID] = nextIndex
 					e.nextIndex[targetID]++
@@ -548,16 +594,16 @@ func (e *Engine) appendEntriesAsync(targetID int32, exits chan bool) {
 	}()
 }
 
-func (e *Engine) commit(index uint64) error {
-	if index > e.commitIndex && e.logs[index].entry.Term == e.currentTerm {
-		numMatch := int32(1) // log[index] already replicated on current node
-		for i := int32(0); i < e.clusterSize; i++ {
-			if i != e.nodeID && e.matchIndex[i] >= index {
+func (e *Engine) commit(logIndex uint64) error {
+	if logIndex > e.commitIndex && e.logs[logIndex].entry.Term == e.currentTerm {
+		numMatch := int32(1) // log[logIndex] already replicated on current node
+		for id := int32(0); id < e.clusterSize; id++ {
+			if id != e.nodeID && e.matchIndex[id] >= logIndex {
 				numMatch++
 			}
 		}
 		if e.isMajority(numMatch) {
-			e.commitIndex = index
+			e.commitIndex = logIndex
 			if err := e.apply(); err != nil {
 				return fmt.Errorf("Apply failed | err=[%w]", err)
 			}
@@ -583,42 +629,6 @@ func (e *Engine) convertToFollower(newCurrentTerm uint64) error {
 	e.currentTerm = newCurrentTerm
 	e.role = roleFollower
 	return nil
-}
-
-func (e *Engine) requestVote(targetAddr string, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
-
-	conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
-	if err != nil {
-		return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | req=%v | states=%v | err=[%w]",
-			targetAddr, req, e, err)
-	}
-	defer conn.Close()
-
-	resp, err := pb.NewRaftClient(conn).RequestVote(context.Background(), req)
-	if err != nil {
-		return nil, fmt.Errorf("RequestVote RPC failed | targetAddr=%v | req=%v | states=%v | err=[%v]",
-			targetAddr, req, e, err)
-	}
-
-	return resp, nil
-}
-
-func (e *Engine) appendEntries(targetAddr string, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
-
-	conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
-	if err != nil {
-		return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | req=%v | states=%v | err=[%w]",
-			targetAddr, req, e, err)
-	}
-	defer conn.Close()
-
-	resp, err := pb.NewRaftClient(conn).AppendEntries(context.Background(), req)
-	if err != nil {
-		return nil, fmt.Errorf("AppendEntries RPC failed | targetAddr=%v | req=%v | states=%v | err=[%v]",
-			targetAddr, req, e, err)
-	}
-
-	return resp, nil
 }
 
 func (e *Engine) waitHeartbeatInterval() {

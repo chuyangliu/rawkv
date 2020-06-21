@@ -86,7 +86,7 @@ func (s *Server) serveRaft(addr string) {
 func (s *Server) applyRaftLog(cmd uint32, rawKey []byte, rawVal []byte) error {
 	key := store.Key(rawKey)
 	val := store.Value(rawVal)
-	// TODO
+	// TODO apply raft log
 	s.logger.Warn("applyRaftLog() not implemented | cmd=%v | key=%v | val=%v", cmd, key, val)
 	return nil
 }
