@@ -96,6 +96,11 @@ func NewK8SNodeProvider(logLevel int) (*K8SNodeProvider, error) {
 // NodeProvider Implementation
 // ---------------------------
 
+// IDNil returns the nil value of node id.
+func (p *K8SNodeProvider) IDNil() int32 {
+	return -1
+}
+
 // ID returns the id of current node.
 func (p *K8SNodeProvider) ID() (int32, error) {
 	return p.id, nil

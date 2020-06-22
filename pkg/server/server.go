@@ -49,9 +49,13 @@ func (s *Server) Serve(storageAddr string, raftAddr string) error {
 		return fmt.Errorf("Create raft engine failed | rootdir=%v | err=[%w]", s.rootdir, err)
 	}
 
+	// start grpc servers
 	go s.serveStorage(storageAddr)
 	go s.serveRaft(raftAddr)
+
+	// start raft engine
 	s.raftEngine.Run()
+
 	return nil
 }
 

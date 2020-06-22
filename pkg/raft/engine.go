@@ -25,8 +25,6 @@ const (
 	roleFollower  uint8 = 0
 	roleCandidate uint8 = 1
 	roleLeader    uint8 = 2
-
-	nodeIDNil int32 = -1
 )
 
 // ApplyLogFunc applies a raft log to state machine.
@@ -82,113 +80,91 @@ func NewEngine(rootdir string, applyLog ApplyLogFunc, logLevel int) (*Engine, er
 		return nil, fmt.Errorf("Create root directory failed | raftdir=%v | err=[%w]", raftdir, err)
 	}
 
-	// create node provider
-	nodeProvider, err := cluster.NewK8SNodeProvider(logLevel)
-	if err != nil {
-		return nil, fmt.Errorf("Create Kubernetes node provider failed | raftdir=%v | err=[%w]", raftdir, err)
-	}
-
-	// get number of raft nodes in the cluster
-	clusterSize, err := nodeProvider.Size()
-	if err != nil {
-		return nil, fmt.Errorf("Query cluster size failed | raftdir=%v | err=[%w]", raftdir, err)
-	}
-	if clusterSize < 3 {
-		return nil, fmt.Errorf("Require at least three nodes in the cluster for fault tolerance | raftdir=%v"+
-			" | clusterSize=%v | err=[%w]", raftdir, clusterSize, err)
-	}
-
-	// get current node index in the cluster
-	nodeID, err := nodeProvider.ID()
-	if err != nil {
-		return nil, fmt.Errorf("Query node id failed | raftdir=%v | clusterSize=%v | err=[%w]",
-			raftdir, clusterSize, err)
-	}
-
-	// establish grpc connections with other raft nodes in the cluster
-	clients, err := createRaftClients(nodeProvider, clusterSize, nodeID)
-	if err != nil {
-		return nil, fmt.Errorf("Create raft clients failed | raftdir=%v | clusterSize=%v | nodeID=%v | err=[%w]",
-			raftdir, clusterSize, nodeID, err)
-	}
-
-	// instantiate
 	engine := &Engine{
 		raftdir:  raftdir,
 		applyLog: applyLog,
 		logger:   logging.New(logLevel),
-
-		nodeProvider: nodeProvider,
-		clusterSize:  clusterSize,
-		nodeID:       nodeID,
-		clients:      clients,
-
-		commitIndex: 0,
-		lastApplied: 0,
-
-		nextIndex:  make([]uint64, clusterSize),
-		matchIndex: make([]uint64, clusterSize),
-
-		role:     roleFollower,
-		leaderID: nodeIDNil,
-
-		electionTimer:     newRaftTimer(logLevel, 2000, 5000),
-		heartbeatInterval: 1000,
-
-		cancelElectionTimeout: make(chan bool),
 	}
 
-	// nextIndex starts at 1
-	for i := range engine.nextIndex {
-		engine.nextIndex[i] = 1
-	}
-
-	// init raft persistent states
-	if err := engine.initPersistStates(); err != nil {
-		return nil, fmt.Errorf("Initialize raft persistent states failed | err=[%w]", err)
+	if err := engine.init(); err != nil {
+		return nil, fmt.Errorf("Initialize raft engine failed | err=[%w]", err)
 	}
 
 	return engine, nil
 }
 
-func createRaftClients(nodeProvider cluster.NodeProvider, clusterSize int32, nodeID int32) ([]pb.RaftClient, error) {
-	clients := make([]pb.RaftClient, clusterSize)
-
-	for id := int32(0); id < clusterSize; id++ {
-		if id != nodeID {
-
-			targetAddr, err := nodeProvider.RaftAddr(id)
-			if err != nil {
-				return nil, fmt.Errorf("Get node address failed | targetID=%v | clusterSize=%v | nodeID=%v | err=[%w]",
-					id, clusterSize, nodeID, err)
-			}
-
-			conn, err := grpc.Dial(targetAddr, grpc.WithInsecure())
-			if err != nil {
-				return nil, fmt.Errorf("Connect raft server failed | targetAddr=%v | clusterSize=%v | nodeID=%v"+
-					" | err=[%w]", targetAddr, clusterSize, nodeID, err)
-			}
-
-			clients[id] = pb.NewRaftClient(conn)
-		}
-	}
-
-	return clients, nil
+func (e *Engine) String() string {
+	return fmt.Sprintf("[raftdir=%v | clusterSize=%v | nodeID=%v | currentTerm=%v | votedFor=%v | logs=%v"+
+		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderID=%v]", e.raftdir,
+		e.clusterSize, e.nodeID, e.currentTerm, e.votedFor, e.logs, e.commitIndex, e.lastApplied, e.nextIndex,
+		e.matchIndex, e.role, e.leaderID)
 }
 
-func (e *Engine) initPersistStates() error {
+func (e *Engine) init() error {
+	var err error
 
+	// create node provider
+	e.nodeProvider, err = cluster.NewK8SNodeProvider(e.logger.Level())
+	if err != nil {
+		return fmt.Errorf("Create k8s node provider failed | states=%v | err=[%w]", e, err)
+	}
+
+	// get number of raft nodes in the cluster, wait until cluster size >= 3
+	for {
+		e.clusterSize, err = e.nodeProvider.Size()
+		if err != nil {
+			return fmt.Errorf("Get cluster size failed | states=%v | err=[%w]", e, err)
+		}
+		if e.clusterSize >= 3 {
+			break
+		}
+		e.logger.Warn("Require at least three nodes in the cluster for fault tolerance. Retry after 1 second"+
+			" | states=%v", e)
+		time.Sleep(1 * time.Second)
+	}
+
+	// get current node index in the cluster
+	e.nodeID, err = e.nodeProvider.ID()
+	if err != nil {
+		return fmt.Errorf("Get node id failed | states=%v | err=[%w]", e, err)
+	}
+
+	// init persistent state: currentTerm
 	if err := e.initCurrentTerm(path.Join(e.raftdir, fileCurrentTerm)); err != nil {
 		return fmt.Errorf("Initialize currentTerm failed | err=[%w]", err)
 	}
 
+	// init persistens state: votedFor
 	if err := e.initVotedFor(path.Join(e.raftdir, fileVotedFor)); err != nil {
 		return fmt.Errorf("Initialize votedFor failed | err=[%w]", err)
 	}
 
+	// init persistent state: logs
 	if err := e.initLogs(path.Join(e.raftdir, fileLogs)); err != nil {
 		return fmt.Errorf("Initialize logs failed | err=[%w]", err)
 	}
+
+	// init volatile states on all servers
+	e.commitIndex = 0
+	e.lastApplied = 0
+
+	// init volatile states on leaders
+	e.matchIndex = make([]uint64, e.clusterSize)
+	e.nextIndex = make([]uint64, e.clusterSize)
+	for i := range e.nextIndex {
+		e.nextIndex[i] = 1
+	}
+
+	// init metadata
+	e.role = roleFollower
+	e.leaderID = e.nodeProvider.IDNil()
+
+	// init timers and timeouts
+	e.electionTimer = newRaftTimer(e.logger.Level(), 5000, 10000)
+	e.heartbeatInterval = 3000
+
+	// init channels
+	e.cancelElectionTimeout = make(chan bool)
 
 	return nil
 }
@@ -226,7 +202,7 @@ func (e *Engine) initVotedFor(filePath string) error {
 
 	if err := binary.Read(file, binary.BigEndian, &e.votedFor); err != nil {
 		if err == io.EOF {
-			e.votedFor = nodeIDNil
+			e.votedFor = e.nodeProvider.IDNil()
 			if err = binary.Write(file, binary.BigEndian, e.votedFor); err != nil {
 				return fmt.Errorf("Write initial votedFor file failed | path=%v | states=%v | err=[%w]",
 					filePath, e, err)
@@ -269,16 +245,16 @@ func (e *Engine) initLogs(filePath string) error {
 	return nil
 }
 
-func (e *Engine) String() string {
-	return fmt.Sprintf("[raftdir=%v | clusterSize=%v | nodeID=%v | currentTerm=%v | votedFor=%v | logs=%v"+
-		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderID=%v]", e.raftdir,
-		e.clusterSize, e.nodeID, e.currentTerm, e.votedFor, e.logs, e.commitIndex, e.lastApplied, e.nextIndex,
-		e.matchIndex, e.role, e.leaderID)
-}
-
 // Run starts raft service on current node.
-func (e *Engine) Run() {
+func (e *Engine) Run() error {
+
+	// establish grpc connections with other raft nodes in the cluster
+	if err := e.initRaftClients(); err != nil {
+		return fmt.Errorf("Create grpc clients failed | err=[%w]", err)
+	}
+
 	e.logger.Info("Raft engine started | states=%v", e)
+
 	for {
 		switch e.role {
 		case roleFollower:
@@ -291,8 +267,31 @@ func (e *Engine) Run() {
 			panic(fmt.Sprintf("Invalid raft role (error most likely caused by incorrect raft implementation)"+
 				" | states=%v", e))
 		}
-		e.logger.Debug("Print raft states | states=%v", e)
 	}
+}
+
+func (e *Engine) initRaftClients() error {
+	e.clients = make([]pb.RaftClient, e.clusterSize)
+
+	for id := int32(0); id < e.clusterSize; id++ {
+		if id != e.nodeID {
+
+			targetAddr, err := e.nodeProvider.RaftAddr(id)
+			if err != nil {
+				return fmt.Errorf("Get node address failed | targetID=%v | states=%v | err=[%w]", id, e, err)
+			}
+
+			conn, err := grpc.Dial(targetAddr, grpc.WithInsecure(), grpc.WithBlock())
+			if err != nil {
+				return fmt.Errorf("Connect raft server failed | targetAddr=%v | states=%v | err=[%w]",
+					targetAddr, e, err)
+			}
+
+			e.clients[id] = pb.NewRaftClient(conn)
+		}
+	}
+
+	return nil
 }
 
 // RequestVoteHandler handles received RequestVote RPC.
@@ -309,15 +308,16 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 	}
 
 	if req.GetTerm() > e.currentTerm {
+		e.logger.Info("RequestVote received from newer term: convert to follower | req=%v | states=%v", req, e)
 		if err := e.convertToFollower(req.GetTerm()); err != nil {
 			e.logger.Error("Convert to follower failed | err=[%v]", err)
 			return resp, nil
 		}
 	}
 
-	if (e.votedFor == nodeIDNil || e.votedFor == req.CandidateID) &&
+	if (e.votedFor == e.nodeProvider.IDNil() || e.votedFor == req.CandidateID) &&
 		e.atLeastUpToDate(req.LastLogIndex, req.LastLogTerm) {
-		if err := e.vote(req.CandidateID); err != nil {
+		if err := e.setVotedFor(req.CandidateID); err != nil {
 			e.logger.Error("Vote candidate failed | req=%v | err=[%v]", req, err)
 			return resp, nil
 		}
@@ -325,7 +325,7 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 		e.cancelElectionTimeout <- true
 	}
 
-	e.logger.Debug("RequestVote handled | req=%v | resp=%v | states=%v", req, resp, e)
+	e.logger.Info("RequestVote handled | req=%v | resp=%v | states=%v", req, resp, e)
 	return resp, nil
 }
 
@@ -351,6 +351,7 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 	}
 
 	if req.GetTerm() > e.currentTerm || e.role == roleCandidate {
+		e.logger.Info("AppendEntries received from newer term: convert to follower | req=%v | states=%v", req, e)
 		if err := e.convertToFollower(req.GetTerm()); err != nil {
 			e.logger.Error("Convert to follower failed | err=[%v]", err)
 			return resp, nil
@@ -460,10 +461,12 @@ func (e *Engine) truncateAndAppendLog(log *raftLog) error {
 }
 
 func (e *Engine) follower() {
+	e.cancelElectionTimeout = make(chan bool)
 	e.electionTimer.start()
 	select {
 	case <-e.electionTimer.timeout():
 		e.role = roleCandidate
+		e.logger.Info("Follower timeout: convert to candidate | states=%v", e)
 	case <-e.cancelElectionTimeout:
 		e.electionTimer.stop()
 	}
@@ -471,12 +474,12 @@ func (e *Engine) follower() {
 
 func (e *Engine) candidate() {
 
-	if err := e.incrCurrentTerm(); err != nil {
+	if err := e.setCurrentTerm(e.currentTerm + 1); err != nil {
 		e.logger.Error("Increase current term failed | err=[%v]", err)
 		return
 	}
 
-	if err := e.vote(e.nodeID); err != nil {
+	if err := e.setVotedFor(e.nodeID); err != nil {
 		e.logger.Error("Vote for self failed | err=[%v]", err)
 		return
 	}
@@ -487,48 +490,53 @@ func (e *Engine) candidate() {
 
 	select {
 	case <-e.electionTimer.timeout():
-		return
+		e.logger.Info("Candidate timeout: start new election | states=%v", e)
 	case suc := <-majority:
 		if suc {
 			e.electionTimer.stop()
 			e.role = roleLeader
 			e.leaderID = e.nodeID
-			e.logger.Info("New leader elected | states=%v", e)
+			e.logger.Info("Candidate received votes from majority: new leader elected | states=%v", e)
 		} else {
 			// not receive majority, wait timeout before starting new election
 			<-e.electionTimer.timeout()
+			e.logger.Info("Candidate failed to receive votes from majority: start new election | states=%v", e)
 		}
 	}
 }
 
-func (e *Engine) incrCurrentTerm() error {
+func (e *Engine) setCurrentTerm(newTerm uint64) error {
 
 	filePath := path.Join(e.raftdir, fileCurrentTerm)
 	file, err := os.OpenFile(filePath, os.O_WRONLY, 0666)
 	if err != nil {
-		return fmt.Errorf("Open currentTerm file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
+		return fmt.Errorf("Open currentTerm file failed | path=%v | newTerm=%v | states=%v | err=[%w]",
+			filePath, newTerm, e, err)
 	}
 	defer file.Close()
 
-	if err = binary.Write(file, binary.BigEndian, e.currentTerm+1); err != nil {
-		return fmt.Errorf("Write currentTerm file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
+	if err = binary.Write(file, binary.BigEndian, newTerm); err != nil {
+		return fmt.Errorf("Write currentTerm file failed | path=%v | newTerm=%v | states=%v | err=[%w]",
+			filePath, newTerm, e, err)
 	}
 
-	e.currentTerm++
+	e.currentTerm = newTerm
 	return nil
 }
 
-func (e *Engine) vote(nodeID int32) error {
+func (e *Engine) setVotedFor(nodeID int32) error {
 
 	filePath := path.Join(e.raftdir, fileVotedFor)
 	file, err := os.OpenFile(filePath, os.O_WRONLY, 0666)
 	if err != nil {
-		return fmt.Errorf("Open votedFor file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
+		return fmt.Errorf("Open votedFor file failed | path=%v | nodeID=%v | states=%v | err=[%w]",
+			filePath, nodeID, e, err)
 	}
 	defer file.Close()
 
 	if err = binary.Write(file, binary.BigEndian, nodeID); err != nil {
-		return fmt.Errorf("Write votedFor file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
+		return fmt.Errorf("Write votedFor file failed | path=%v | nodeID=%v | states=%v | err=[%w]",
+			filePath, nodeID, e, err)
 	}
 
 	e.votedFor = nodeID
@@ -569,11 +577,11 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 
 		resp, err := e.clients[targetID].RequestVote(context.Background(), req)
 		if err != nil {
-			e.logger.Error("RequestVote failed | states=%v | err=[%v]", e, err)
+			e.logger.Error("RequestVote failed | targetID=%v | req=%v | states=%v | err=[%v]", targetID, req, e, err)
 			votes <- false
 			return
 		}
-		e.logger.Debug("RequestVote sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
+		e.logger.Info("RequestVote sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
 
 		if resp.GetTerm() > e.currentTerm {
 			if err := e.convertToFollower(resp.GetTerm()); err != nil {
@@ -587,16 +595,20 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 
 func (e *Engine) leader() {
 	exits := make(chan bool)
+
 	for id := int32(0); id < e.clusterSize; id++ {
 		if id != e.nodeID {
 			e.appendEntriesAsync(id, exits)
 		}
 	}
+
 	for id := int32(0); id < e.clusterSize; id++ {
 		if id != e.nodeID {
 			<-exits
 		}
 	}
+
+	e.logger.Info("Leader exited | states=%v", e)
 }
 
 func (e *Engine) appendEntriesAsync(targetID int32, exits chan bool) {
@@ -620,8 +632,10 @@ func (e *Engine) appendEntriesAsync(targetID int32, exits chan bool) {
 
 			resp, err := e.clients[targetID].AppendEntries(context.Background(), req)
 			if err != nil {
-				e.logger.Error("AppendEntries failed | states=%v | err=[%v]", e, err)
-				return
+				e.logger.Error("AppendEntries failed | targetID=%v | req=%v | states=%v | err=[%v]",
+					targetID, req, e, err)
+				e.waitHeartbeatInterval()
+				continue
 			}
 			e.logger.Debug("AppendEntries sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
 
@@ -678,11 +692,13 @@ func (e *Engine) apply() error {
 	return nil
 }
 
-func (e *Engine) convertToFollower(newCurrentTerm uint64) error {
-	if err := e.vote(nodeIDNil); err != nil {
-		return fmt.Errorf("Reset votedFor failed | err=[%w]", err)
+func (e *Engine) convertToFollower(newTerm uint64) error {
+	if err := e.setVotedFor(e.nodeProvider.IDNil()); err != nil {
+		return fmt.Errorf("Reset votedFor failed | newTerm=%v | err=[%w]", newTerm, err)
 	}
-	e.currentTerm = newCurrentTerm
+	if err := e.setCurrentTerm(newTerm); err != nil {
+		return fmt.Errorf("Set new currentTerm failed | newTerm=%v | err=[%w]", newTerm, err)
+	}
 	e.role = roleFollower
 	return nil
 }

@@ -2,6 +2,8 @@ package cluster
 
 // NodeProvider provides information about nodes in the cluster.
 type NodeProvider interface {
+	// IDNil returns the nil value of node id.
+	IDNil() int32
 	// ID returns the id of current node.
 	ID() (int32, error)
 	// RaftAddr returns the network address of node (with the given id) providing raft service.
