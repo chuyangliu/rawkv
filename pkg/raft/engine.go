@@ -26,11 +26,11 @@ const (
 	roleCandidate uint8 = 1
 	roleLeader    uint8 = 2
 
-	electionTimeoutMin = 5000 // ms
-	electionTimeoutMax = 0    // ms
-	heartbeatInterval  = 3000 // ms
+	electionTimeoutMin int64 = 3000 // ms
+	electionTimeoutMax int64 = 6000 // ms
+	heartbeatInterval  int64 = 1000 // ms
 
-	persistQueueLen = 1000
+	persistQueueLen int = 1000
 )
 
 // ApplyLogFunc applies a raft log to state machine.
@@ -730,8 +730,8 @@ func (e *Engine) replicateAsync(targetID int32, heartbeat bool, errs chan error)
 
 		if !heartbeat {
 			lastLogIndex := uint64(len(e.logs) - 1)
-			for ; nextIndex <= lastLogIndex; nextIndex++ {
-				req.Entries = append(req.Entries, e.logs[nextIndex].entry)
+			for i := uint64(0); i <= lastLogIndex; i++ {
+				req.Entries = append(req.Entries, e.logs[i].entry)
 			}
 		}
 
@@ -753,26 +753,33 @@ func (e *Engine) replicateAsync(targetID int32, heartbeat bool, errs chan error)
 
 		if len(req.Entries) > 0 {
 			if resp.GetSuccess() {
-				e.matchIndex[targetID] = nextIndex
-				e.nextIndex[targetID]++
-				e.commit(nextIndex)
+				newNextIndex := nextIndex + uint64(len(req.Entries))
+				e.nextIndex[targetID] = newNextIndex
+				e.matchIndex[targetID] = newNextIndex - 1
+				e.commit(nextIndex, newNextIndex)
 			} else {
 				e.nextIndex[targetID] = max(1, e.nextIndex[targetID]-1)
 			}
 		}
+
+		errs <- nil
 	}()
 }
 
-func (e *Engine) commit(logIndex uint64) {
-	if logIndex > e.commitIndex && e.logs[logIndex].entry.GetTerm() == e.currentTerm {
-		numMatch := int32(1) // log[logIndex] already replicated on current node
-		for id := int32(0); id < e.clusterSize; id++ {
-			if id != e.nodeID && e.matchIndex[id] >= logIndex {
-				numMatch++
+func (e *Engine) commit(begIndex uint64, endIndex uint64) {
+	for i := begIndex; i < endIndex; i++ {
+		if i > e.commitIndex && e.logs[i].entry.GetTerm() == e.currentTerm {
+			numMatch := int32(1) // log[i] already replicated on current node
+			for id := int32(0); id < e.clusterSize; id++ {
+				if id != e.nodeID && e.matchIndex[id] >= i {
+					numMatch++
+				}
 			}
-		}
-		if e.isMajority(numMatch) {
-			e.commitIndex = logIndex
+			if e.isMajority(numMatch) {
+				e.commitIndex = i
+			} else {
+				break
+			}
 		}
 	}
 }
