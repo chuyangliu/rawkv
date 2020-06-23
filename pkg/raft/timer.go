@@ -16,7 +16,17 @@ type raftTimer struct {
 	timer       *time.Timer
 }
 
-func newRaftTimer(logLevel int, durationMin int64, durationMax int64) *raftTimer {
+func newRaftTimer(logLevel int, duration int64) *raftTimer {
+	return &raftTimer{
+		logger:      logging.New(logLevel),
+		durationMin: duration,
+		durationMax: duration,
+		random:      nil,
+		timer:       nil,
+	}
+}
+
+func newRaftTimerRand(logLevel int, durationMin int64, durationMax int64) *raftTimer {
 	return &raftTimer{
 		logger:      logging.New(logLevel),
 		durationMin: durationMin,
@@ -41,6 +51,9 @@ func (t *raftTimer) timeout() <-chan time.Time {
 }
 
 func (t *raftTimer) getDuration() time.Duration {
-	ms := t.random.Int63n(t.durationMax-t.durationMin+1) + t.durationMin
+	ms := t.durationMin
+	if t.random != nil {
+		ms = t.random.Int63n(t.durationMax-t.durationMin+1) + t.durationMin
+	}
 	return time.Duration(ms) * time.Millisecond
 }

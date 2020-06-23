@@ -17,17 +17,29 @@ const (
 	CmdDel uint32 = 1
 )
 
-type raftLog struct {
+// Log represents raft replicated log entry.
+type Log struct {
 	entry *pb.AppendEntriesReq_LogEntry
 }
 
-func newRaftLog(entry *pb.AppendEntriesReq_LogEntry) *raftLog {
-	return &raftLog{
+// NewLog creates a new raft log.
+func NewLog(cmd uint32, key []byte, val []byte) *Log {
+	return &Log{
+		entry: &pb.AppendEntriesReq_LogEntry{
+			Cmd: cmd,
+			Key: key,
+			Val: val,
+		},
+	}
+}
+
+func newLogFromPb(entry *pb.AppendEntriesReq_LogEntry) *Log {
+	return &Log{
 		entry: entry,
 	}
 }
 
-func newRaftLogFromFile(reader io.Reader) (*raftLog, error) {
+func newLogFromFile(reader io.Reader) (*Log, error) {
 
 	var index uint64
 	if err := binary.Read(reader, binary.BigEndian, &index); err != nil {
@@ -57,7 +69,7 @@ func newRaftLogFromFile(reader io.Reader) (*raftLog, error) {
 		return nil, fmt.Errorf("Read log key failed | err=[%w]", err)
 	}
 
-	log := &raftLog{
+	log := &Log{
 		entry: &pb.AppendEntriesReq_LogEntry{
 			Index: index,
 			Term:  term,
@@ -83,51 +95,51 @@ func newRaftLogFromFile(reader io.Reader) (*raftLog, error) {
 	return log, nil
 }
 
-func (rl *raftLog) String() string {
+func (l *Log) String() string {
 	return fmt.Sprintf("[index=%v | term=%v | cmd=%v | key=%v | val=%v]",
-		rl.entry.GetIndex(), rl.entry.GetTerm(), rl.entry.GetCmd(), rl.entry.GetKey(), rl.entry.GetVal())
+		l.entry.GetIndex(), l.entry.GetTerm(), l.entry.GetCmd(), l.entry.GetKey(), l.entry.GetVal())
 }
 
-func (rl *raftLog) write(writer io.Writer) error {
+func (l *Log) write(writer io.Writer) error {
 
-	if err := binary.Write(writer, binary.BigEndian, rl.entry.Index); err != nil {
-		return fmt.Errorf("Write log index failed | log=%v | err=[%w]", rl, err)
+	if err := binary.Write(writer, binary.BigEndian, l.entry.Index); err != nil {
+		return fmt.Errorf("Write log index failed | log=%v | err=[%w]", l, err)
 	}
 
-	if err := binary.Write(writer, binary.BigEndian, rl.entry.Term); err != nil {
-		return fmt.Errorf("Write log term failed | log=%v | err=[%w]", rl, err)
+	if err := binary.Write(writer, binary.BigEndian, l.entry.Term); err != nil {
+		return fmt.Errorf("Write log term failed | log=%v | err=[%w]", l, err)
 	}
 
-	if err := binary.Write(writer, binary.BigEndian, rl.entry.Cmd); err != nil {
-		return fmt.Errorf("Write log command failed | log=%v | err=[%w]", rl, err)
+	if err := binary.Write(writer, binary.BigEndian, l.entry.Cmd); err != nil {
+		return fmt.Errorf("Write log command failed | log=%v | err=[%w]", l, err)
 	}
 
-	if err := binary.Write(writer, binary.BigEndian, store.KVLen(len(rl.entry.Key))); err != nil {
-		return fmt.Errorf("Write log key length failed | log=%v | err=[%w]", rl, err)
+	if err := binary.Write(writer, binary.BigEndian, store.KVLen(len(l.entry.Key))); err != nil {
+		return fmt.Errorf("Write log key length failed | log=%v | err=[%w]", l, err)
 	}
 
-	if _, err := writer.Write(rl.entry.Key); err != nil {
-		return fmt.Errorf("Write log key failed | log=%v | err=[%w]", rl, err)
+	if _, err := writer.Write(l.entry.Key); err != nil {
+		return fmt.Errorf("Write log key failed | log=%v | err=[%w]", l, err)
 	}
 
-	if rl.entry.Cmd == CmdPut {
-		if err := binary.Write(writer, binary.BigEndian, store.KVLen(len(rl.entry.Val))); err != nil {
-			return fmt.Errorf("Write log value length failed | log=%v | err=[%w]", rl, err)
+	if l.entry.Cmd == CmdPut {
+		if err := binary.Write(writer, binary.BigEndian, store.KVLen(len(l.entry.Val))); err != nil {
+			return fmt.Errorf("Write log value length failed | log=%v | err=[%w]", l, err)
 		}
 
-		if _, err := writer.Write(rl.entry.Val); err != nil {
-			return fmt.Errorf("Write log value failed | log=%v | err=[%w]", rl, err)
+		if _, err := writer.Write(l.entry.Val); err != nil {
+			return fmt.Errorf("Write log value failed | log=%v | err=[%w]", l, err)
 		}
 	}
 
 	return nil
 }
 
-func (rl *raftLog) size() int64 {
-	ans := unsafe.Sizeof(rl.entry.Index) + unsafe.Sizeof(rl.entry.Term) + unsafe.Sizeof(rl.entry.Cmd) +
-		unsafe.Sizeof(store.KVLen(0)) + uintptr(len(rl.entry.Key))
-	if rl.entry.Cmd == CmdPut {
-		ans += unsafe.Sizeof(store.KVLen(0)) + uintptr(len(rl.entry.Val))
+func (l *Log) size() int64 {
+	ans := unsafe.Sizeof(l.entry.Index) + unsafe.Sizeof(l.entry.Term) + unsafe.Sizeof(l.entry.Cmd) +
+		unsafe.Sizeof(store.KVLen(0)) + uintptr(len(l.entry.Key))
+	if l.entry.Cmd == CmdPut {
+		ans += unsafe.Sizeof(store.KVLen(0)) + uintptr(len(l.entry.Val))
 	}
 	return int64(ans)
 }

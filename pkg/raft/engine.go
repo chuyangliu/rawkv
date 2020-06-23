@@ -25,10 +25,16 @@ const (
 	roleFollower  uint8 = 0
 	roleCandidate uint8 = 1
 	roleLeader    uint8 = 2
+
+	electionTimeoutMin = 5000 // ms
+	electionTimeoutMax = 0    // ms
+	heartbeatInterval  = 3000 // ms
+
+	persistQueueLen = 1000
 )
 
 // ApplyLogFunc applies a raft log to state machine.
-type ApplyLogFunc func(cmd uint32, rawKey []byte, rawVal []byte) error
+type ApplyLogFunc func(log *Log) error
 
 // Engine manages raft states and operations.
 type Engine struct {
@@ -45,7 +51,7 @@ type Engine struct {
 	// persistent state on all servers
 	currentTerm uint64
 	votedFor    int32
-	logs        []*raftLog // log index starts at 1
+	logs        []*Log // log index starts at 1
 
 	// volatile state on all servers
 	commitIndex uint64
@@ -64,11 +70,20 @@ type Engine struct {
 	// election timer
 	electionTimer *raftTimer
 
-	// time interval (milliseconds) between two heartbeats (AppendEntries RPCs) sent from leader
-	heartbeatInterval int64
+	// heartbeat timer to control empty AppendEntries sent during idle periods
+	heartbeatTimer *raftTimer
 
 	// channel to cancel follower's election timeout
 	cancelElectionTimeout chan bool
+
+	// queue to implement producer and consumer model for persist requests
+	persistQueue chan *persistTask
+}
+
+type persistTask struct {
+	logIndex uint64
+	done     chan bool
+	err      error
 }
 
 // NewEngine instantiates an Engine.
@@ -160,11 +175,14 @@ func (e *Engine) init() error {
 	e.leaderID = e.nodeProvider.IDNil()
 
 	// init timers and timeouts
-	e.electionTimer = newRaftTimer(e.logger.Level(), 5000, 10000)
-	e.heartbeatInterval = 3000
+	e.electionTimer = newRaftTimerRand(e.logger.Level(), electionTimeoutMin, electionTimeoutMax)
+	e.heartbeatTimer = newRaftTimer(e.logger.Level(), heartbeatInterval)
 
 	// init channels
 	e.cancelElectionTimeout = make(chan bool)
+
+	// init persist queue
+	e.persistQueue = make(chan *persistTask, persistQueueLen)
 
 	return nil
 }
@@ -224,7 +242,7 @@ func (e *Engine) initLogs(filePath string) error {
 	defer file.Close()
 
 	// add a dummy log to make log index start at 1
-	e.logs = []*raftLog{{
+	e.logs = []*Log{{
 		entry: &pb.AppendEntriesReq_LogEntry{
 			Index: 0,
 			Term:  0,
@@ -232,7 +250,7 @@ func (e *Engine) initLogs(filePath string) error {
 	}}
 
 	for {
-		log, err := newRaftLogFromFile(file)
+		log, err := newLogFromFile(file)
 		if err != nil {
 			return fmt.Errorf("Read log failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 		}
@@ -379,14 +397,14 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 				" implementation) | req=%v | states=%v", req, e))
 		}
 		if index >= uint64(len(e.logs)) {
-			if err := e.appendLog(newRaftLog(entry)); err != nil {
+			if err := e.appendLog(newLogFromPb(entry)); err != nil {
 				e.logger.Error("Append log failed | err=[%v]", err)
 				return resp, nil
 			}
 		} else {
 			if entry.GetTerm() != e.logs[index].entry.GetTerm() {
 				// conflict entry (same index but different terms), delete the existing entry and all that follow it
-				if err := e.truncateAndAppendLog(newRaftLog(entry)); err != nil {
+				if err := e.truncateAndAppendLog(newLogFromPb(entry)); err != nil {
 					e.logger.Error("Truncate and append log failed | err=[%v]", err)
 					return resp, nil
 				}
@@ -408,7 +426,7 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 	return resp, nil
 }
 
-func (e *Engine) appendLog(log *raftLog) error {
+func (e *Engine) appendLog(log *Log) error {
 
 	filePath := path.Join(e.raftdir, fileLogs)
 	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_APPEND, 0666)
@@ -426,7 +444,7 @@ func (e *Engine) appendLog(log *raftLog) error {
 	return nil
 }
 
-func (e *Engine) truncateAndAppendLog(log *raftLog) error {
+func (e *Engine) truncateAndAppendLog(log *Log) error {
 
 	filePath := path.Join(e.raftdir, fileLogs)
 	file, err := os.OpenFile(filePath, os.O_WRONLY, 0666)
@@ -593,78 +611,159 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 	}()
 }
 
+// Persist replicates a raft log and applies it to state machine if succeeds.
+func (e *Engine) Persist(log *Log) error {
+
+	// set log index and term
+	log.entry.Index = uint64(len(e.logs))
+	log.entry.Term = e.currentTerm
+
+	// append log to disk
+	if err := e.appendLog(log); err != nil {
+		return fmt.Errorf("Append log failed | err=[%w]", err)
+	}
+
+	// add persist task to queue
+	task := &persistTask{
+		logIndex: log.entry.Index,
+		done:     make(chan bool),
+		err:      nil,
+	}
+	e.persistQueue <- task
+
+	// wait task completion
+	if !<-task.done {
+		return task.err
+	}
+
+	return nil
+}
+
 func (e *Engine) leader() {
-	exits := make(chan bool)
+	for e.role == roleLeader {
+		heartbeat := false
+		task := (*persistTask)(nil)
 
-	for id := int32(0); id < e.clusterSize; id++ {
-		if id != e.nodeID {
-			e.appendEntriesAsync(id, exits)
+		e.heartbeatTimer.start()
+		select {
+		case <-e.heartbeatTimer.timeout():
+			heartbeat = true
+		case task, _ = <-e.persistQueue:
+			e.heartbeatTimer.stop()
+		}
+
+		if !heartbeat && e.lastApplied >= task.logIndex {
+			task.done <- true
+			continue
+		}
+
+		if err := e.replicate(heartbeat); err != nil {
+			if !heartbeat {
+				task.err = err
+				task.done <- false
+			}
+			e.logger.Error("Replicate logs failed | heartbeat=%v | task=%v | err=[%v]", heartbeat, task, err)
+			continue
+		}
+
+		if !heartbeat {
+			if err := e.apply(); err != nil {
+				task.err = err
+				task.done <- false
+				e.logger.Error("Apply logs failed | task=%v | err=[%v]", task, err)
+				continue
+			}
+
+			if e.lastApplied < task.logIndex {
+				panic(fmt.Sprintf("Expect persist task log applied (error most likely caused by incorrect raft"+
+					" implementation) | task=%v | states=%v", task, e))
+			}
+
+			task.done <- true
 		}
 	}
-
-	for id := int32(0); id < e.clusterSize; id++ {
-		if id != e.nodeID {
-			<-exits
-		}
-	}
-
 	e.logger.Info("Leader exited | states=%v", e)
 }
 
-func (e *Engine) appendEntriesAsync(targetID int32, exits chan bool) {
-	go func() {
-		for e.role == roleLeader {
-			nextIndex := e.nextIndex[targetID]
-			prevLog := e.logs[nextIndex-1]
-			req := &pb.AppendEntriesReq{
-				Term:         e.currentTerm,
-				LeaderID:     e.nodeID,
-				PrevLogIndex: prevLog.entry.GetIndex(),
-				PrevLogTerm:  prevLog.entry.GetTerm(),
-				Entries:      make([]*pb.AppendEntriesReq_LogEntry, 0),
-				LeaderCommit: e.commitIndex,
-			}
+func (e *Engine) apply() error {
+	for ; e.commitIndex > e.lastApplied; e.lastApplied++ {
+		log := e.logs[e.lastApplied+1]
+		if err := e.applyLog(log); err != nil {
+			return fmt.Errorf("Apply log failed | log=%v | states=%v | err=[%w]", log, e, err)
+		}
+	}
+	return nil
+}
 
+func (e *Engine) replicate(heartbeat bool) error {
+	errs := make(chan error)
+
+	for id := int32(0); id < e.clusterSize; id++ {
+		if id != e.nodeID {
+			e.replicateAsync(id, heartbeat, errs)
+		}
+	}
+
+	for id := int32(0); id < e.clusterSize; id++ {
+		if id != e.nodeID {
+			if err := <-errs; err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (e *Engine) replicateAsync(targetID int32, heartbeat bool, errs chan error) {
+	go func() {
+		nextIndex := e.nextIndex[targetID]
+		prevLog := e.logs[nextIndex-1]
+		req := &pb.AppendEntriesReq{
+			Term:         e.currentTerm,
+			LeaderID:     e.nodeID,
+			PrevLogIndex: prevLog.entry.GetIndex(),
+			PrevLogTerm:  prevLog.entry.GetTerm(),
+			Entries:      make([]*pb.AppendEntriesReq_LogEntry, 0),
+			LeaderCommit: e.commitIndex,
+		}
+
+		if !heartbeat {
 			lastLogIndex := uint64(len(e.logs) - 1)
 			for ; nextIndex <= lastLogIndex; nextIndex++ {
 				req.Entries = append(req.Entries, e.logs[nextIndex].entry)
 			}
-
-			resp, err := e.clients[targetID].AppendEntries(context.Background(), req)
-			if err != nil {
-				e.logger.Error("AppendEntries failed | targetID=%v | req=%v | states=%v | err=[%v]",
-					targetID, req, e, err)
-				e.waitHeartbeatInterval()
-				continue
-			}
-			e.logger.Debug("AppendEntries sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
-
-			if resp.GetTerm() > e.currentTerm {
-				if err := e.convertToFollower(resp.GetTerm()); err != nil {
-					e.logger.Error("Convert to follower failed | err=[%v]", err)
-				}
-				break
-			}
-
-			if len(req.Entries) > 0 {
-				if resp.GetSuccess() {
-					e.matchIndex[targetID] = nextIndex
-					e.nextIndex[targetID]++
-					if err := e.commit(nextIndex); err != nil {
-						e.logger.Error("Commit failed | err=[%v]", err)
-					}
-				} else {
-					e.nextIndex[targetID] = max(1, e.nextIndex[targetID]-1)
-				}
-			}
-
-			e.waitHeartbeatInterval()
 		}
-		exits <- true
+
+		resp, err := e.clients[targetID].AppendEntries(context.Background(), req)
+		if err != nil {
+			errs <- fmt.Errorf("AppendEntries failed | targetID=%v | req=%v | states=%v | err=[%v]",
+				targetID, req, e, err)
+			return
+		}
+		e.logger.Debug("AppendEntries sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
+
+		if resp.GetTerm() > e.currentTerm {
+			if err := e.convertToFollower(resp.GetTerm()); err != nil {
+				errs <- fmt.Errorf("Convert to follower failed | err=[%w]", err)
+			}
+			errs <- nil
+			return
+		}
+
+		if len(req.Entries) > 0 {
+			if resp.GetSuccess() {
+				e.matchIndex[targetID] = nextIndex
+				e.nextIndex[targetID]++
+				e.commit(nextIndex)
+			} else {
+				e.nextIndex[targetID] = max(1, e.nextIndex[targetID]-1)
+			}
+		}
 	}()
 }
 
-func (e *Engine) commit(logIndex uint64) error {
+func (e *Engine) commit(logIndex uint64) {
 	if logIndex > e.commitIndex && e.logs[logIndex].entry.GetTerm() == e.currentTerm {
 		numMatch := int32(1) // log[logIndex] already replicated on current node
 		for id := int32(0); id < e.clusterSize; id++ {
@@ -674,22 +773,8 @@ func (e *Engine) commit(logIndex uint64) error {
 		}
 		if e.isMajority(numMatch) {
 			e.commitIndex = logIndex
-			if err := e.apply(); err != nil {
-				return fmt.Errorf("Apply failed | err=[%w]", err)
-			}
 		}
 	}
-	return nil
-}
-
-func (e *Engine) apply() error {
-	for ; e.commitIndex > e.lastApplied; e.lastApplied++ {
-		log := e.logs[e.lastApplied+1].entry
-		if err := e.applyLog(log.Cmd, log.Key, log.Val); err != nil {
-			return fmt.Errorf("Apply log failed | log=%v | states=%v | err=[%w]", log, e, err)
-		}
-	}
-	return nil
 }
 
 func (e *Engine) convertToFollower(newTerm uint64) error {
@@ -701,10 +786,6 @@ func (e *Engine) convertToFollower(newTerm uint64) error {
 	}
 	e.role = roleFollower
 	return nil
-}
-
-func (e *Engine) waitHeartbeatInterval() {
-	time.Sleep(time.Duration(e.heartbeatInterval) * time.Millisecond)
 }
 
 func (e *Engine) isMajority(num int32) bool {
