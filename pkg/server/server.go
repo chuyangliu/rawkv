@@ -88,9 +88,14 @@ func (s *Server) serveRaft(addr string) {
 }
 
 func (s *Server) applyRaftLog(log *raft.Log) error {
-	// TODO apply raft log
-	s.logger.Warn("applyRaftLog() not implemented | log=%v", log)
-	return nil
+	switch log.Cmd() {
+	case raft.CmdPut:
+		return s.shardMgr.Put(log.Key(), log.Val())
+	case raft.CmdDel:
+		return s.shardMgr.Del(log.Key())
+	default:
+		return fmt.Errorf("Unsupported log command | cmd=%v", log.Cmd())
+	}
 }
 
 // -------------------------------
@@ -108,7 +113,7 @@ func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 // Put adds or updates a key-value pair to the storage.
 func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 	s.logger.Debug("Put | key=%v | val=%v", store.Key(req.Key), store.Value(req.Val))
-	err := s.shardMgr.Put(store.Key(req.Key), store.Value(req.Val))
+	err := s.raftEngine.Persist(raft.NewLog(raft.CmdPut, req.GetKey(), req.GetVal()))
 	resp := &pb.PutResp{}
 	return resp, err
 }
@@ -116,7 +121,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 // Del removes key from the storage.
 func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	s.logger.Debug("Del | key=%v", store.Key(req.Key))
-	err := s.shardMgr.Del(store.Key(req.Key))
+	err := s.raftEngine.Persist(raft.NewLog(raft.CmdDel, req.GetKey(), nil))
 	resp := &pb.DelResp{}
 	return resp, err
 }

@@ -100,6 +100,21 @@ func (l *Log) String() string {
 		l.entry.GetIndex(), l.entry.GetTerm(), l.entry.GetCmd(), l.entry.GetKey(), l.entry.GetVal())
 }
 
+// Cmd returns the command stored in the log.
+func (l *Log) Cmd() uint32 {
+	return l.entry.GetCmd()
+}
+
+// Key returns the key stored in the log.
+func (l *Log) Key() store.Key {
+	return store.Key(l.entry.GetKey())
+}
+
+// Val returns the value stored in the log.
+func (l *Log) Val() store.Value {
+	return store.Value(l.entry.GetVal())
+}
+
 func (l *Log) write(writer io.Writer) error {
 
 	if err := binary.Write(writer, binary.BigEndian, l.entry.Index); err != nil {
