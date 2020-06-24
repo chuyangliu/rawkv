@@ -16,7 +16,7 @@ func main() {
 	level := flag.Int("loglevel", 1, "Log level (0/1/2/3 => Debug/Info/Warn/Error).")
 	flag.Parse()
 
-	svr, err := server.New(*rootdir, store.KVLen(*flushThresh), store.KVLen(*blkSize), *level)
+	svr, err := server.New(*level, *rootdir, store.KVLen(*flushThresh), store.KVLen(*blkSize))
 	if err != nil {
 		panic(err)
 	}

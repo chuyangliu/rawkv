@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 
 	"google.golang.org/grpc"
 
+	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/pb"
 	"github.com/chuyangliu/rawkv/pkg/raft"
@@ -17,14 +19,18 @@ import (
 
 // Server manages the server running on node.
 type Server struct {
-	rootdir    string
-	shardMgr   *shardmgr.Manager
-	raftEngine *raft.Engine
-	logger     *logging.Logger
+	logger   *logging.Logger
+	initDone bool
+
+	rootdir  string
+	shardMgr *shardmgr.Manager
+
+	clusterMeta cluster.Meta
+	raftEngine  *raft.Engine
 }
 
 // New instantiates a Server.
-func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel int) (*Server, error) {
+func New(logLevel int, rootdir string, flushThresh store.KVLen, blkSize store.KVLen) (*Server, error) {
 
 	// create root directory
 	if err := os.MkdirAll(rootdir, 0777); err != nil {
@@ -32,26 +38,35 @@ func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel 
 	}
 
 	return &Server{
-		rootdir:    rootdir,
-		shardMgr:   shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
-		raftEngine: nil,
-		logger:     logging.New(logLevel),
+		logger:   logging.New(logLevel),
+		initDone: false,
+		rootdir:  rootdir,
+		shardMgr: shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
 	}, nil
 }
 
 // Serve runs the server instance and start handling incoming requests.
 func (s *Server) Serve(storageAddr string, raftAddr string) error {
-
-	// create raft engine
 	var err error
-	s.raftEngine, err = raft.NewEngine(s.rootdir, s.applyRaftLog, s.logger.Level())
-	if err != nil {
-		return fmt.Errorf("Create raft engine failed | rootdir=%v | err=[%w]", s.rootdir, err)
-	}
 
 	// start grpc servers
 	go s.serveStorage(storageAddr)
 	go s.serveRaft(raftAddr)
+
+	// create cluster meta
+	s.clusterMeta, err = cluster.NewKubeMeta(s.logger.Level())
+	if err != nil {
+		return fmt.Errorf("Create cluster meta failed | err=[%w]", err)
+	}
+
+	// create raft engine
+	s.raftEngine, err = raft.NewEngine(s.logger.Level(), s.rootdir, s.applyRaftLog, s.clusterMeta)
+	if err != nil {
+		return fmt.Errorf("Create raft engine failed | rootdir=%v | err=[%w]", s.rootdir, err)
+	}
+
+	// signal init complete
+	s.initDone = true
 
 	// start raft engine
 	s.raftEngine.Run()
@@ -105,6 +120,9 @@ func (s *Server) applyRaftLog(log *raft.Log) error {
 // Get returns the value associated with the key, and a boolean indicating whether the key exists.
 func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 	s.logger.Debug("Get | key=%v", store.Key(req.Key))
+	if !s.initDone {
+		return nil, errors.New("Server not ready")
+	}
 	val, found, err := s.shardMgr.Get(store.Key(req.Key))
 	resp := &pb.GetResp{Val: []byte(val), Found: found}
 	return resp, err
@@ -113,6 +131,9 @@ func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 // Put adds or updates a key-value pair to the storage.
 func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 	s.logger.Debug("Put | key=%v | val=%v", store.Key(req.Key), store.Value(req.Val))
+	if !s.initDone {
+		return nil, errors.New("Server not ready")
+	}
 	err := s.raftEngine.Persist(raft.NewLog(raft.CmdPut, req.GetKey(), req.GetVal()))
 	resp := &pb.PutResp{}
 	return resp, err
@@ -121,6 +142,9 @@ func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 // Del removes key from the storage.
 func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	s.logger.Debug("Del | key=%v", store.Key(req.Key))
+	if !s.initDone {
+		return nil, errors.New("Server not ready")
+	}
 	err := s.raftEngine.Persist(raft.NewLog(raft.CmdDel, req.GetKey(), nil))
 	resp := &pb.DelResp{}
 	return resp, err
@@ -132,10 +156,16 @@ func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 
 // RequestVote invoked by candidates to gather votes.
 func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
+	if !s.initDone {
+		return nil, errors.New("Server not ready")
+	}
 	return s.raftEngine.RequestVoteHandler(req)
 }
 
 // AppendEntries invoked by leader to replicate log entries, also used as heartbeat.
 func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
+	if !s.initDone {
+		return nil, errors.New("Server not ready")
+	}
 	return s.raftEngine.AppendEntriesHandler(req)
 }

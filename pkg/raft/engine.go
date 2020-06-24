@@ -7,9 +7,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"time"
-
-	"google.golang.org/grpc"
 
 	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
@@ -38,15 +35,10 @@ type ApplyLogFunc func(log *Log) error
 
 // Engine manages raft states and operations.
 type Engine struct {
-	raftdir  string
-	applyLog ApplyLogFunc
-	logger   *logging.Logger
-
-	// cluster info
-	nodeProvider cluster.NodeProvider
-	clusterSize  int32
-	nodeID       int32
-	clients      []pb.RaftClient
+	logger      *logging.Logger
+	raftdir     string
+	applyLog    ApplyLogFunc
+	clusterMeta cluster.Meta
 
 	// persistent state on all servers
 	currentTerm uint64
@@ -87,7 +79,7 @@ type persistTask struct {
 }
 
 // NewEngine instantiates an Engine.
-func NewEngine(rootdir string, applyLog ApplyLogFunc, logLevel int) (*Engine, error) {
+func NewEngine(logLevel int, rootdir string, applyLog ApplyLogFunc, clusterMeta cluster.Meta) (*Engine, error) {
 
 	// create directory to store raft states
 	raftdir := path.Join(rootdir, dirRaft)
@@ -96,9 +88,10 @@ func NewEngine(rootdir string, applyLog ApplyLogFunc, logLevel int) (*Engine, er
 	}
 
 	engine := &Engine{
-		raftdir:  raftdir,
-		applyLog: applyLog,
-		logger:   logging.New(logLevel),
+		logger:      logging.New(logLevel),
+		raftdir:     raftdir,
+		applyLog:    applyLog,
+		clusterMeta: clusterMeta,
 	}
 
 	if err := engine.init(); err != nil {
@@ -109,40 +102,13 @@ func NewEngine(rootdir string, applyLog ApplyLogFunc, logLevel int) (*Engine, er
 }
 
 func (e *Engine) String() string {
-	return fmt.Sprintf("[raftdir=%v | clusterSize=%v | nodeID=%v | currentTerm=%v | votedFor=%v | logs=%v"+
+	return fmt.Sprintf("[raftdir=%v | clusterMeta=%v | currentTerm=%v | votedFor=%v | logs=%v"+
 		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderID=%v]", e.raftdir,
-		e.clusterSize, e.nodeID, e.currentTerm, e.votedFor, e.logs, e.commitIndex, e.lastApplied, e.nextIndex,
+		e.clusterMeta, e.currentTerm, e.votedFor, e.logs, e.commitIndex, e.lastApplied, e.nextIndex,
 		e.matchIndex, e.role, e.leaderID)
 }
 
 func (e *Engine) init() error {
-	var err error
-
-	// create node provider
-	e.nodeProvider, err = cluster.NewK8SNodeProvider(e.logger.Level())
-	if err != nil {
-		return fmt.Errorf("Create k8s node provider failed | states=%v | err=[%w]", e, err)
-	}
-
-	// get number of raft nodes in the cluster, wait until cluster size >= 3
-	for {
-		e.clusterSize, err = e.nodeProvider.Size()
-		if err != nil {
-			return fmt.Errorf("Get cluster size failed | states=%v | err=[%w]", e, err)
-		}
-		if e.clusterSize >= 3 {
-			break
-		}
-		e.logger.Warn("Require at least three nodes in the cluster for fault tolerance. Retry after 1 second"+
-			" | states=%v", e)
-		time.Sleep(1 * time.Second)
-	}
-
-	// get current node index in the cluster
-	e.nodeID, err = e.nodeProvider.ID()
-	if err != nil {
-		return fmt.Errorf("Get node id failed | states=%v | err=[%w]", e, err)
-	}
 
 	// init persistent state: currentTerm
 	if err := e.initCurrentTerm(path.Join(e.raftdir, fileCurrentTerm)); err != nil {
@@ -164,15 +130,15 @@ func (e *Engine) init() error {
 	e.lastApplied = 0
 
 	// init volatile states on leaders
-	e.matchIndex = make([]uint64, e.clusterSize)
-	e.nextIndex = make([]uint64, e.clusterSize)
+	e.matchIndex = make([]uint64, e.clusterMeta.Size())
+	e.nextIndex = make([]uint64, e.clusterMeta.Size())
 	for i := range e.nextIndex {
 		e.nextIndex[i] = 1
 	}
 
 	// init metadata
 	e.role = roleFollower
-	e.leaderID = e.nodeProvider.IDNil()
+	e.leaderID = e.clusterMeta.NodeIDNil()
 
 	// init timers and timeouts
 	e.electionTimer = newRaftTimerRand(e.logger.Level(), electionTimeoutMin, electionTimeoutMax)
@@ -220,7 +186,7 @@ func (e *Engine) initVotedFor(filePath string) error {
 
 	if err := binary.Read(file, binary.BigEndian, &e.votedFor); err != nil {
 		if err == io.EOF {
-			e.votedFor = e.nodeProvider.IDNil()
+			e.votedFor = e.clusterMeta.NodeIDNil()
 			if err = binary.Write(file, binary.BigEndian, e.votedFor); err != nil {
 				return fmt.Errorf("Write initial votedFor file failed | path=%v | states=%v | err=[%w]",
 					filePath, e, err)
@@ -265,14 +231,7 @@ func (e *Engine) initLogs(filePath string) error {
 
 // Run starts raft service on current node.
 func (e *Engine) Run() error {
-
-	// establish grpc connections with other raft nodes in the cluster
-	if err := e.initRaftClients(); err != nil {
-		return fmt.Errorf("Create grpc clients failed | err=[%w]", err)
-	}
-
 	e.logger.Info("Raft engine started | states=%v", e)
-
 	for {
 		switch e.role {
 		case roleFollower:
@@ -286,30 +245,6 @@ func (e *Engine) Run() error {
 				" | states=%v", e))
 		}
 	}
-}
-
-func (e *Engine) initRaftClients() error {
-	e.clients = make([]pb.RaftClient, e.clusterSize)
-
-	for id := int32(0); id < e.clusterSize; id++ {
-		if id != e.nodeID {
-
-			targetAddr, err := e.nodeProvider.RaftAddr(id)
-			if err != nil {
-				return fmt.Errorf("Get node address failed | targetID=%v | states=%v | err=[%w]", id, e, err)
-			}
-
-			conn, err := grpc.Dial(targetAddr, grpc.WithInsecure(), grpc.WithBlock())
-			if err != nil {
-				return fmt.Errorf("Connect raft server failed | targetAddr=%v | states=%v | err=[%w]",
-					targetAddr, e, err)
-			}
-
-			e.clients[id] = pb.NewRaftClient(conn)
-		}
-	}
-
-	return nil
 }
 
 // RequestVoteHandler handles received RequestVote RPC.
@@ -333,7 +268,7 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 		}
 	}
 
-	if (e.votedFor == e.nodeProvider.IDNil() || e.votedFor == req.CandidateID) &&
+	if (e.votedFor == e.clusterMeta.NodeIDNil() || e.votedFor == req.CandidateID) &&
 		e.atLeastUpToDate(req.LastLogIndex, req.LastLogTerm) {
 		if err := e.setVotedFor(req.CandidateID); err != nil {
 			e.logger.Error("Vote candidate failed | req=%v | err=[%v]", req, err)
@@ -497,7 +432,7 @@ func (e *Engine) candidate() {
 		return
 	}
 
-	if err := e.setVotedFor(e.nodeID); err != nil {
+	if err := e.setVotedFor(e.clusterMeta.NodeIDSelf()); err != nil {
 		e.logger.Error("Vote for self failed | err=[%v]", err)
 		return
 	}
@@ -513,7 +448,7 @@ func (e *Engine) candidate() {
 		if suc {
 			e.electionTimer.stop()
 			e.role = roleLeader
-			e.leaderID = e.nodeID
+			e.leaderID = e.clusterMeta.NodeIDSelf()
 			e.logger.Info("Candidate received votes from majority: new leader elected | states=%v", e)
 		} else {
 			// not receive majority, wait timeout before starting new election
@@ -565,15 +500,15 @@ func (e *Engine) requestVotesAsync(majority chan bool) {
 	go func() {
 
 		votes := make(chan bool)
-		for id := int32(0); id < e.clusterSize; id++ {
-			if id != e.nodeID {
+		for id := int32(0); id < e.clusterMeta.Size(); id++ {
+			if id != e.clusterMeta.NodeIDSelf() {
 				e.requestVoteAsync(id, votes)
 			}
 		}
 
 		numGrant := int32(1) // start at 1 since candidate votes for self before requesting votes to others
-		for id := int32(0); id < e.clusterSize; id++ {
-			if id != e.nodeID && <-votes {
+		for id := int32(0); id < e.clusterMeta.Size(); id++ {
+			if id != e.clusterMeta.NodeIDSelf() && <-votes {
 				numGrant++
 			}
 		}
@@ -588,12 +523,12 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 		lastLog := e.logs[len(e.logs)-1]
 		req := &pb.RequestVoteReq{
 			Term:         e.currentTerm,
-			CandidateID:  e.nodeID,
+			CandidateID:  e.clusterMeta.NodeIDSelf(),
 			LastLogIndex: lastLog.entry.GetIndex(),
 			LastLogTerm:  lastLog.entry.GetTerm(),
 		}
 
-		resp, err := e.clients[targetID].RequestVote(context.Background(), req)
+		resp, err := e.clusterMeta.RaftClient(targetID).RequestVote(context.Background(), req)
 		if err != nil {
 			e.logger.Error("RequestVote failed | targetID=%v | req=%v | states=%v | err=[%v]", targetID, req, e, err)
 			votes <- false
@@ -698,14 +633,14 @@ func (e *Engine) apply() error {
 func (e *Engine) replicate(heartbeat bool) error {
 	errs := make(chan error)
 
-	for id := int32(0); id < e.clusterSize; id++ {
-		if id != e.nodeID {
+	for id := int32(0); id < e.clusterMeta.Size(); id++ {
+		if id != e.clusterMeta.NodeIDSelf() {
 			e.replicateAsync(id, heartbeat, errs)
 		}
 	}
 
-	for id := int32(0); id < e.clusterSize; id++ {
-		if id != e.nodeID {
+	for id := int32(0); id < e.clusterMeta.Size(); id++ {
+		if id != e.clusterMeta.NodeIDSelf() {
 			if err := <-errs; err != nil {
 				return err
 			}
@@ -721,7 +656,7 @@ func (e *Engine) replicateAsync(targetID int32, heartbeat bool, errs chan error)
 		prevLog := e.logs[nextIndex-1]
 		req := &pb.AppendEntriesReq{
 			Term:         e.currentTerm,
-			LeaderID:     e.nodeID,
+			LeaderID:     e.clusterMeta.NodeIDSelf(),
 			PrevLogIndex: prevLog.entry.GetIndex(),
 			PrevLogTerm:  prevLog.entry.GetTerm(),
 			Entries:      make([]*pb.AppendEntriesReq_LogEntry, 0),
@@ -735,7 +670,7 @@ func (e *Engine) replicateAsync(targetID int32, heartbeat bool, errs chan error)
 			}
 		}
 
-		resp, err := e.clients[targetID].AppendEntries(context.Background(), req)
+		resp, err := e.clusterMeta.RaftClient(targetID).AppendEntries(context.Background(), req)
 		if err != nil {
 			errs <- fmt.Errorf("AppendEntries failed | targetID=%v | req=%v | states=%v | err=[%v]",
 				targetID, req, e, err)
@@ -770,8 +705,8 @@ func (e *Engine) commit(begIndex uint64, endIndex uint64) {
 	for i := begIndex; i < endIndex; i++ {
 		if i > e.commitIndex && e.logs[i].entry.GetTerm() == e.currentTerm {
 			numMatch := int32(1) // log[i] already replicated on current node
-			for id := int32(0); id < e.clusterSize; id++ {
-				if id != e.nodeID && e.matchIndex[id] >= i {
+			for id := int32(0); id < e.clusterMeta.Size(); id++ {
+				if id != e.clusterMeta.NodeIDSelf() && e.matchIndex[id] >= i {
 					numMatch++
 				}
 			}
@@ -785,18 +720,19 @@ func (e *Engine) commit(begIndex uint64, endIndex uint64) {
 }
 
 func (e *Engine) convertToFollower(newTerm uint64) error {
-	if err := e.setVotedFor(e.nodeProvider.IDNil()); err != nil {
+	if err := e.setVotedFor(e.clusterMeta.NodeIDNil()); err != nil {
 		return fmt.Errorf("Reset votedFor failed | newTerm=%v | err=[%w]", newTerm, err)
 	}
 	if err := e.setCurrentTerm(newTerm); err != nil {
 		return fmt.Errorf("Set new currentTerm failed | newTerm=%v | err=[%w]", newTerm, err)
 	}
+	e.leaderID = e.clusterMeta.NodeIDNil()
 	e.role = roleFollower
 	return nil
 }
 
 func (e *Engine) isMajority(num int32) bool {
-	return num > e.clusterSize/2
+	return num > e.clusterMeta.Size()/2
 }
 
 func min(a uint64, b uint64) uint64 {
