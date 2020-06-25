@@ -12,11 +12,11 @@ func main() {
 	raftAddr := flag.String("raftaddr", "127.0.0.1:5641", "Address for raft server to listen.")
 	rootdir := flag.String("rootdir", "./rawkv-root", "Root directory to persist data.")
 	flushThresh := flag.Uint64("flushthresh", uint64(1)<<25, "Threshold in bytes to flush MemStore.")
-	blkSize := flag.Uint64("blocksize", uint64(1)<<18, "Block size in bytes to persist FileStore.")
+	blockSize := flag.Uint64("blocksize", uint64(1)<<18, "Block size in bytes to persist FileStore.")
 	level := flag.Int("loglevel", 1, "Log level (0/1/2/3 => Debug/Info/Warn/Error).")
 	flag.Parse()
 
-	svr, err := server.New(*level, *rootdir, store.KVLen(*flushThresh), store.KVLen(*blkSize))
+	svr, err := server.New(*level, *rootdir, store.KVLen(*flushThresh), store.KVLen(*blockSize))
 	if err != nil {
 		panic(err)
 	}

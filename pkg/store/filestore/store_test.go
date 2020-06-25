@@ -22,7 +22,7 @@ type checkExistResult struct {
 
 func TestBasic(t *testing.T) {
 	max := 1000
-	blkSize := store.KVLen(4096)
+	blockSize := store.KVLen(4096)
 	path := "./filestore.test"
 
 	// create data
@@ -39,7 +39,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	// create FileStore from MemStore
-	fs, err := New(path, ms, logging.LevelDebug)
+	fs, err := New(logging.LevelDebug, path, ms)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
@@ -58,7 +58,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	// flush
-	if err := fs.Flush(blkSize); !assert.NoError(t, err) {
+	if err := fs.Flush(blockSize); !assert.NoError(t, err) {
 		panic(nil)
 	}
 
@@ -76,7 +76,7 @@ func TestBasic(t *testing.T) {
 	}
 
 	// create FileStore from disk
-	fs, err = New(path, nil, logging.LevelDebug)
+	fs, err = New(logging.LevelDebug, path, nil)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
@@ -98,7 +98,7 @@ func TestBasic(t *testing.T) {
 func TestConcurrency(t *testing.T) {
 	max := 1000
 	step := 100
-	blkSize := store.KVLen(4096)
+	blockSize := store.KVLen(4096)
 	path := "./filestore.test"
 
 	// create data
@@ -115,7 +115,7 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// create FileStore from MemStore
-	fs, err := New(path, ms, logging.LevelDebug)
+	fs, err := New(logging.LevelDebug, path, ms)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
@@ -128,7 +128,7 @@ func TestConcurrency(t *testing.T) {
 
 	// flush
 	sleepRand()
-	if err := fs.Flush(blkSize); !assert.NoError(t, err) {
+	if err := fs.Flush(blockSize); !assert.NoError(t, err) {
 		panic(nil)
 	}
 
@@ -140,7 +140,7 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// create FileStore from disk
-	fs, err = New(path, nil, logging.LevelDebug)
+	fs, err = New(logging.LevelDebug, path, nil)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}

@@ -1,7 +1,10 @@
 package shardmgr
 
 import (
+	"fmt"
+
 	"github.com/chuyangliu/rawkv/pkg/logging"
+	"github.com/chuyangliu/rawkv/pkg/raft"
 	"github.com/chuyangliu/rawkv/pkg/store"
 	sd "github.com/chuyangliu/rawkv/pkg/store/shard"
 )
@@ -9,21 +12,31 @@ import (
 // Manager manages a collection of Shards.
 // Currently only a single shard is managed as shard split hasn't been implemented.
 type Manager struct {
-	shards []*sd.Shard
-	logger *logging.Logger
+	logger     *logging.Logger
+	shards     []*sd.Shard
+	raftEngine *raft.Engine
 }
 
 // New instantiates a new Manager.
-func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel int) *Manager {
-	return &Manager{
-		shards: []*sd.Shard{sd.New(rootdir, flushThresh, blkSize, logLevel)},
-		logger: logging.New(logLevel),
+func New(logLevel int, rootdir string, flushThresh store.KVLen, blockSize store.KVLen,
+	raftEngine *raft.Engine) *Manager {
+
+	m := &Manager{
+		logger:     logging.New(logLevel),
+		shards:     []*sd.Shard{sd.New(logLevel, rootdir, flushThresh, blockSize)},
+		raftEngine: raftEngine,
 	}
+
+	if raftEngine != nil {
+		raftEngine.SetApplyFunc(m.applyRaftLog)
+	}
+
+	return m
 }
 
 // Get returns the value associated with the key, and a boolean indicating whether the key exists.
-func (m *Manager) Get(key store.Key) (store.Value, bool, error) {
-	entry, err := m.shards[0].Get(key)
+func (m *Manager) Get(key []byte) (store.Value, bool, error) {
+	entry, err := m.shards[0].Get(store.Key(key))
 	if err != nil {
 		return "", false, err
 	} else if entry == nil || entry.Stat == store.KStatDel {
@@ -33,11 +46,28 @@ func (m *Manager) Get(key store.Key) (store.Value, bool, error) {
 }
 
 // Put adds or updates a key-value pair to the shards.
-func (m *Manager) Put(key store.Key, val store.Value) error {
-	return m.shards[0].Put(key, val)
+func (m *Manager) Put(key []byte, val []byte) error {
+	if m.raftEngine == nil { // no raft cluster, perform the operation locally
+		return m.shards[0].Put(store.Key(key), store.Value(val))
+	}
+	return m.raftEngine.Persist(raft.NewPutLog(key, val))
 }
 
 // Del removes key from the shards.
-func (m *Manager) Del(key store.Key) error {
-	return m.shards[0].Del(key)
+func (m *Manager) Del(key []byte) error {
+	if m.raftEngine == nil { // no raft cluster, perform the operation locally
+		return m.shards[0].Del(store.Key(key))
+	}
+	return m.raftEngine.Persist(raft.NewDelLog(key))
+}
+
+func (m *Manager) applyRaftLog(log *raft.Log) error {
+	switch log.Cmd() {
+	case raft.CmdPut:
+		return m.shards[0].Put(log.Key(), log.Val())
+	case raft.CmdDel:
+		return m.shards[0].Del(log.Key())
+	default:
+		return fmt.Errorf("Unsupported log command | cmd=%v", log.Cmd())
+	}
 }

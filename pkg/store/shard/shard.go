@@ -13,24 +13,24 @@ import (
 
 // Shard stores a range of key-value data.
 type Shard struct {
+	logger      *logging.Logger
 	rootdir     string             // path to root directory to persist FileStores
 	flushThresh store.KVLen        // threshold in bytes to flush MemStore
-	blkSize     store.KVLen        // block size in bytes of FileStore
+	blockSize   store.KVLen        // block size in bytes of FileStore
 	mem         *memstore.Store    // single MemStore
 	files       []*filestore.Store // multiple FileStores from oldest to newest
 	lock        sync.RWMutex
-	logger      *logging.Logger
 }
 
 // New instantiates an empty Shard.
-func New(rootdir string, flushThresh store.KVLen, blkSize store.KVLen, logLevel int) *Shard {
+func New(logLevel int, rootdir string, flushThresh store.KVLen, blockSize store.KVLen) *Shard {
 	return &Shard{
+		logger:      logging.New(logLevel),
 		rootdir:     rootdir,
 		flushThresh: flushThresh,
-		blkSize:     blkSize,
+		blockSize:   blockSize,
 		mem:         memstore.New(logLevel),
 		files:       make([]*filestore.Store, 0),
-		logger:      logging.New(logLevel),
 	}
 }
 
@@ -85,11 +85,11 @@ func (s *Shard) Del(key store.Key) error {
 
 func (s *Shard) flush() error {
 	filePath := s.nextFilePath()
-	fs, err := filestore.New(filePath, s.mem, s.logger.Level())
+	fs, err := filestore.New(s.logger.Level(), filePath, s.mem)
 	if err != nil {
 		return fmt.Errorf("Create FileStore failed | path=%v | err=[%w]", filePath, err)
 	}
-	fs.BeginFlush(s.blkSize)
+	fs.BeginFlush(s.blockSize)
 	s.files = append(s.files, fs)
 	s.mem = memstore.New(s.logger.Level())
 	return nil

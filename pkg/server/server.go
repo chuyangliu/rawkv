@@ -19,18 +19,19 @@ import (
 
 // Server manages the server running on node.
 type Server struct {
-	logger   *logging.Logger
-	initDone bool
-
-	rootdir  string
-	shardMgr *shardmgr.Manager
+	logger      *logging.Logger
+	rootdir     string
+	flushThresh store.KVLen
+	blockSize   store.KVLen
+	initDone    bool
 
 	clusterMeta cluster.Meta
 	raftEngine  *raft.Engine
+	shardMgr    *shardmgr.Manager
 }
 
 // New instantiates a Server.
-func New(logLevel int, rootdir string, flushThresh store.KVLen, blkSize store.KVLen) (*Server, error) {
+func New(logLevel int, rootdir string, flushThresh store.KVLen, blockSize store.KVLen) (*Server, error) {
 
 	// create root directory
 	if err := os.MkdirAll(rootdir, 0777); err != nil {
@@ -38,10 +39,11 @@ func New(logLevel int, rootdir string, flushThresh store.KVLen, blkSize store.KV
 	}
 
 	return &Server{
-		logger:   logging.New(logLevel),
-		initDone: false,
-		rootdir:  rootdir,
-		shardMgr: shardmgr.New(rootdir, flushThresh, blkSize, logLevel),
+		logger:      logging.New(logLevel),
+		rootdir:     rootdir,
+		flushThresh: flushThresh,
+		blockSize:   blockSize,
+		initDone:    false,
 	}, nil
 }
 
@@ -60,10 +62,13 @@ func (s *Server) Serve(storageAddr string, raftAddr string) error {
 	}
 
 	// create raft engine
-	s.raftEngine, err = raft.NewEngine(s.logger.Level(), s.rootdir, s.applyRaftLog, s.clusterMeta)
+	s.raftEngine, err = raft.NewEngine(s.logger.Level(), s.rootdir, s.clusterMeta)
 	if err != nil {
 		return fmt.Errorf("Create raft engine failed | rootdir=%v | err=[%w]", s.rootdir, err)
 	}
+
+	// create shard manager
+	s.shardMgr = shardmgr.New(s.logger.Level(), s.rootdir, s.flushThresh, s.blockSize, s.raftEngine)
 
 	// signal init complete
 	s.initDone = true
@@ -102,50 +107,39 @@ func (s *Server) serveRaft(addr string) {
 	}
 }
 
-func (s *Server) applyRaftLog(log *raft.Log) error {
-	switch log.Cmd() {
-	case raft.CmdPut:
-		return s.shardMgr.Put(log.Key(), log.Val())
-	case raft.CmdDel:
-		return s.shardMgr.Del(log.Key())
-	default:
-		return fmt.Errorf("Unsupported log command | cmd=%v", log.Cmd())
-	}
-}
-
 // -------------------------------
 // pb.StorageServer Implementation
 // -------------------------------
 
 // Get returns the value associated with the key, and a boolean indicating whether the key exists.
 func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
-	s.logger.Debug("Get | key=%v", store.Key(req.Key))
+	s.logger.Debug("Get | key=%v", store.Key(req.GetKey()))
 	if !s.initDone {
 		return nil, errors.New("Server not ready")
 	}
-	val, found, err := s.shardMgr.Get(store.Key(req.Key))
+	val, found, err := s.shardMgr.Get(req.GetKey())
 	resp := &pb.GetResp{Val: []byte(val), Found: found}
 	return resp, err
 }
 
 // Put adds or updates a key-value pair to the storage.
 func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
-	s.logger.Debug("Put | key=%v | val=%v", store.Key(req.Key), store.Value(req.Val))
+	s.logger.Debug("Put | key=%v | val=%v", store.Key(req.GetKey()), store.Value(req.GetVal()))
 	if !s.initDone {
 		return nil, errors.New("Server not ready")
 	}
-	err := s.raftEngine.Persist(raft.NewLog(raft.CmdPut, req.GetKey(), req.GetVal()))
+	err := s.shardMgr.Put(req.GetKey(), req.GetVal())
 	resp := &pb.PutResp{}
 	return resp, err
 }
 
 // Del removes key from the storage.
 func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
-	s.logger.Debug("Del | key=%v", store.Key(req.Key))
+	s.logger.Debug("Del | key=%v", store.Key(req.GetKey()))
 	if !s.initDone {
 		return nil, errors.New("Server not ready")
 	}
-	err := s.raftEngine.Persist(raft.NewLog(raft.CmdDel, req.GetKey(), nil))
+	err := s.shardMgr.Del(req.GetKey())
 	resp := &pb.DelResp{}
 	return resp, err
 }

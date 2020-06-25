@@ -29,7 +29,7 @@ func TestBasic(t *testing.T) {
 	max := 1000
 	rootdir := "./shard.test"
 	flushThresh := store.KVLen(1024 * 10)
-	blkSize := store.KVLen(1024 * 2)
+	blockSize := store.KVLen(1024 * 2)
 
 	// create root directory
 	if err := os.MkdirAll(rootdir, 0777); !assert.NoError(t, err) {
@@ -44,7 +44,7 @@ func TestBasic(t *testing.T) {
 	sort.Strings(data)
 
 	// create Shard
-	s := New(rootdir, flushThresh, blkSize, logging.LevelDebug)
+	s := New(logging.LevelDebug, rootdir, flushThresh, blockSize)
 
 	// put
 	for _, v := range data {
@@ -92,7 +92,7 @@ func TestConcurrency(t *testing.T) {
 	step := 100
 	rootdir := "./shard.test"
 	flushThresh := store.KVLen(1024 * 10)
-	blkSize := store.KVLen(1024 * 2)
+	blockSize := store.KVLen(1024 * 2)
 
 	// create root directory
 	if err := os.MkdirAll(rootdir, 0777); !assert.NoError(t, err) {
@@ -107,7 +107,7 @@ func TestConcurrency(t *testing.T) {
 	sort.Strings(data)
 
 	// create Shard
-	s := New(rootdir, flushThresh, blkSize, logging.LevelDebug)
+	s := New(logging.LevelDebug, rootdir, flushThresh, blockSize)
 
 	// put
 	putResults := make(chan putDelResult, max)

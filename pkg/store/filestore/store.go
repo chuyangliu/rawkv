@@ -15,17 +15,17 @@ import (
 
 // Store persists key-value data as an immutable file on disk.
 type Store struct {
+	logger *logging.Logger
 	path   string          // path to store file
 	mem    *memstore.Store // read-only, reset to nil after flushed
 	idx    *blockIndex     // index to locate blocks in store file
 	lock   sync.RWMutex
-	logger *logging.Logger
 }
 
 // New instantiates a FileStore.
 // If ms is nil, the FileStore is backed by store file on disk.
 // Otherwise, ms will be used to back FileStore and can be flushed to store file.
-func New(path string, ms *memstore.Store, logLevel int) (*Store, error) {
+func New(logLevel int, path string, ms *memstore.Store) (*Store, error) {
 	s := &Store{
 		path:   path,
 		mem:    ms,
@@ -58,26 +58,26 @@ func (s *Store) Get(key store.Key) (*store.Entry, error) {
 		return nil, nil
 	}
 
-	blk, err := readBlock(s.path, idxEntry)
+	block, err := readBlock(s.path, idxEntry)
 	if err != nil {
 		return nil, fmt.Errorf("Read block failed | path=%v | err=[%w]", s.path, err)
 	}
 
-	entry := blk.get(key)
+	entry := block.get(key)
 	return entry, nil
 }
 
 // BeginFlush flushes MemStore in background.
-func (s *Store) BeginFlush(blkSize store.KVLen) {
+func (s *Store) BeginFlush(blockSize store.KVLen) {
 	go func() {
-		if err := s.Flush(blkSize); err != nil {
+		if err := s.Flush(blockSize); err != nil {
 			s.logger.Error("Background flush failed | path=%v | err=[%v]", s.path, err)
 		}
 	}()
 }
 
 // Flush persists MemStore to store file. Can be called only once.
-func (s *Store) Flush(blkSize store.KVLen) error {
+func (s *Store) Flush(blockSize store.KVLen) error {
 	if s.mem == nil {
 		return fmt.Errorf("No MemStore to flush")
 	}
@@ -97,7 +97,7 @@ func (s *Store) Flush(blkSize store.KVLen) error {
 	// persist key-value data
 	for i, entry := range s.mem.Entries() {
 
-		if i == 0 || sizeCur >= blkSize { // first block or finish one block write
+		if i == 0 || sizeCur >= blockSize { // first block or finish one block write
 			// set block length
 			if !s.idx.empty() {
 				s.idx.last().len = sizeCur
@@ -216,21 +216,21 @@ func readBlock(path string, idxEntry *blockIndexEntry) (*fileBlock, error) {
 	}
 
 	reader := bytes.NewReader(raw)
-	blk := newBlock()
+	block := newBlock()
 	size := store.KVLen(0)
 
 	// read kv entries
 	for size < idxEntry.len {
 		entry, err := readKVEntry(reader)
 		if err != nil {
-			return nil, fmt.Errorf("Read kv entry failed | path=%v | size=%v | blkLen=%v | err=[%w]",
+			return nil, fmt.Errorf("Read kv entry failed | path=%v | size=%v | blockLen=%v | err=[%w]",
 				path, size, idxEntry.len, err)
 		}
-		blk.add(entry)
+		block.add(entry)
 		size += entry.Size()
 	}
 
-	return blk, nil
+	return block, nil
 }
 
 func writeKVEntry(writer *bufio.Writer, entry *store.Entry) error {

@@ -29,7 +29,7 @@ func TestBasic(t *testing.T) {
 	max := 1000
 	rootdir := "./shardmgr.test"
 	flushThresh := store.KVLen(1024 * 10)
-	blkSize := store.KVLen(1024 * 2)
+	blockSize := store.KVLen(1024 * 2)
 
 	// create root directory
 	if err := os.MkdirAll(rootdir, 0777); !assert.NoError(t, err) {
@@ -44,18 +44,18 @@ func TestBasic(t *testing.T) {
 	sort.Strings(data)
 
 	// create Manager
-	m := New(rootdir, flushThresh, blkSize, logging.LevelDebug)
+	m := New(logging.LevelDebug, rootdir, flushThresh, blockSize, nil)
 
 	// put
 	for _, v := range data {
-		if err := m.Put(store.Key(v), store.Value(v)); !assert.NoError(t, err) {
+		if err := m.Put([]byte(v), []byte(v)); !assert.NoError(t, err) {
 			panic(nil)
 		}
 	}
 
 	// get
 	for _, v := range data {
-		val, found, err := m.Get(store.Key(v))
+		val, found, err := m.Get([]byte(v))
 		if !assert.NoError(t, err) || !assert.True(t, found) || !assert.Equal(t, store.Value(v), val) {
 			panic(nil)
 		}
@@ -63,14 +63,14 @@ func TestBasic(t *testing.T) {
 
 	// del
 	for _, v := range data {
-		if err := m.Del(store.Key(v)); !assert.NoError(t, err) {
+		if err := m.Del([]byte(v)); !assert.NoError(t, err) {
 			panic(nil)
 		}
 	}
 
 	// get
 	for _, v := range data {
-		_, found, err := m.Get(store.Key(v))
+		_, found, err := m.Get([]byte(v))
 		if !assert.NoError(t, err) || !assert.False(t, found) {
 			panic(nil)
 		}
@@ -82,7 +82,7 @@ func TestConcurrency(t *testing.T) {
 	step := 100
 	rootdir := "./shardmgr.test"
 	flushThresh := store.KVLen(1024 * 10)
-	blkSize := store.KVLen(1024 * 2)
+	blockSize := store.KVLen(1024 * 2)
 
 	// create root directory
 	if err := os.MkdirAll(rootdir, 0777); !assert.NoError(t, err) {
@@ -96,8 +96,8 @@ func TestConcurrency(t *testing.T) {
 	}
 	sort.Strings(data)
 
-	// create Shard
-	m := New(rootdir, flushThresh, blkSize, logging.LevelDebug)
+	// create Manager
+	m := New(logging.LevelDebug, rootdir, flushThresh, blockSize, nil)
 
 	// put
 	putResults := make(chan putDelResult, max)
@@ -146,7 +146,7 @@ func TestConcurrency(t *testing.T) {
 func putData(m *Manager, data []string, results chan putDelResult) {
 	sleepRand()
 	for _, v := range data {
-		err := m.Put(store.Key(v), store.Value(v))
+		err := m.Put([]byte(v), []byte(v))
 		results <- putDelResult{key: store.Key(v), err: err}
 	}
 }
@@ -154,7 +154,7 @@ func putData(m *Manager, data []string, results chan putDelResult) {
 func delData(m *Manager, data []string, results chan putDelResult) {
 	sleepRand()
 	for _, v := range data {
-		err := m.Del(store.Key(v))
+		err := m.Del([]byte(v))
 		results <- putDelResult{key: store.Key(v), err: err}
 	}
 }
@@ -162,7 +162,7 @@ func delData(m *Manager, data []string, results chan putDelResult) {
 func checkDataExist(m *Manager, data []string, results chan checkExistResult) {
 	sleepRand()
 	for _, v := range data {
-		val, found, err := m.Get(store.Key(v))
+		val, found, err := m.Get([]byte(v))
 		results <- checkExistResult{
 			key:   store.Key(v),
 			exist: err == nil && found && val == store.Value(v),

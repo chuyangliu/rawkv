@@ -30,15 +30,17 @@ const (
 	persistQueueLen int = 1000
 )
 
-// ApplyLogFunc applies a raft log to state machine.
-type ApplyLogFunc func(log *Log) error
+// ApplyFunc applies a raft log to state machine.
+type ApplyFunc func(log *Log) error
 
 // Engine manages raft states and operations.
 type Engine struct {
 	logger      *logging.Logger
 	raftdir     string
-	applyLog    ApplyLogFunc
 	clusterMeta cluster.Meta
+
+	// function provided by user to apply a given raft log to state machine
+	applyFunc ApplyFunc
 
 	// persistent state on all servers
 	currentTerm uint64
@@ -79,7 +81,7 @@ type persistTask struct {
 }
 
 // NewEngine instantiates an Engine.
-func NewEngine(logLevel int, rootdir string, applyLog ApplyLogFunc, clusterMeta cluster.Meta) (*Engine, error) {
+func NewEngine(logLevel int, rootdir string, clusterMeta cluster.Meta) (*Engine, error) {
 
 	// create directory to store raft states
 	raftdir := path.Join(rootdir, dirRaft)
@@ -90,7 +92,6 @@ func NewEngine(logLevel int, rootdir string, applyLog ApplyLogFunc, clusterMeta 
 	engine := &Engine{
 		logger:      logging.New(logLevel),
 		raftdir:     raftdir,
-		applyLog:    applyLog,
 		clusterMeta: clusterMeta,
 	}
 
@@ -106,6 +107,11 @@ func (e *Engine) String() string {
 		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderID=%v]", e.raftdir,
 		e.clusterMeta, e.currentTerm, e.votedFor, e.logs, e.commitIndex, e.lastApplied, e.nextIndex,
 		e.matchIndex, e.role, e.leaderID)
+}
+
+// SetApplyFunc set apply function to f.
+func (e *Engine) SetApplyFunc(f ApplyFunc) {
+	e.applyFunc = f
 }
 
 func (e *Engine) init() error {
@@ -623,7 +629,7 @@ func (e *Engine) leader() {
 func (e *Engine) apply() error {
 	for ; e.commitIndex > e.lastApplied; e.lastApplied++ {
 		log := e.logs[e.lastApplied+1]
-		if err := e.applyLog(log); err != nil {
+		if err := e.applyFunc(log); err != nil {
 			return fmt.Errorf("Apply log failed | log=%v | states=%v | err=[%w]", log, e, err)
 		}
 	}

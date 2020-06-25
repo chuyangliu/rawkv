@@ -10,18 +10,18 @@ import (
 
 // Store stores key-value data in memory.
 type Store struct {
+	logger *logging.Logger
 	data   *treemap.Map // map key to store.Entry
 	size   store.KVLen  // number of bytes occupied by data
 	lock   sync.RWMutex
-	logger *logging.Logger
 }
 
 // New instantiates an empty MemStore.
 func New(logLevel int) *Store {
 	return &Store{
+		logger: logging.New(logLevel),
 		data:   treemap.New(store.KeyCmp),
 		size:   0,
-		logger: logging.New(logLevel),
 	}
 }
 

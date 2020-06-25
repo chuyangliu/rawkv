@@ -22,13 +22,24 @@ type Log struct {
 	entry *pb.AppendEntriesReq_LogEntry
 }
 
-// NewLog creates a new raft log.
-func NewLog(cmd uint32, key []byte, val []byte) *Log {
+// NewPutLog creates a new raft log to store put operation.
+func NewPutLog(key []byte, val []byte) *Log {
 	return &Log{
 		entry: &pb.AppendEntriesReq_LogEntry{
-			Cmd: cmd,
+			Cmd: CmdPut,
 			Key: key,
 			Val: val,
+		},
+	}
+}
+
+// NewDelLog creates a new raft log to store delete operation.
+func NewDelLog(key []byte) *Log {
+	return &Log{
+		entry: &pb.AppendEntriesReq_LogEntry{
+			Cmd: CmdDel,
+			Key: key,
+			Val: nil,
 		},
 	}
 }
