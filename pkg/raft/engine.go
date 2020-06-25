@@ -121,7 +121,7 @@ func (e *Engine) init() error {
 		return fmt.Errorf("Initialize currentTerm failed | err=[%w]", err)
 	}
 
-	// init persistens state: votedFor
+	// init persistent state: votedFor
 	if err := e.initVotedFor(path.Join(e.raftdir, fileVotedFor)); err != nil {
 		return fmt.Errorf("Initialize votedFor failed | err=[%w]", err)
 	}
