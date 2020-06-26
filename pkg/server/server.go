@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -114,34 +113,55 @@ func (s *Server) serveRaft(addr string) {
 // Get returns the value associated with the key, and a boolean indicating whether the key exists.
 func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 	s.logger.Debug("Get | key=%v", store.Key(req.GetKey()))
+
 	if !s.initDone {
-		return nil, errors.New("Server not ready")
+		return nil, ErrNotReady
 	}
+
 	val, found, err := s.shardMgr.Get(req.GetKey())
-	resp := &pb.GetResp{Val: []byte(val), Found: found}
-	return resp, err
+	if err != nil {
+		s.logger.Error("Get key failed | err=[%v]", err)
+		return nil, ErrInternal
+	}
+
+	return &pb.GetResp{
+		Val:   []byte(val),
+		Found: found,
+	}, nil
 }
 
 // Put adds or updates a key-value pair to the storage.
 func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 	s.logger.Debug("Put | key=%v | val=%v", store.Key(req.GetKey()), store.Value(req.GetVal()))
+
 	if !s.initDone {
-		return nil, errors.New("Server not ready")
+		return nil, ErrNotReady
 	}
+
 	err := s.shardMgr.Put(req.GetKey(), req.GetVal())
-	resp := &pb.PutResp{}
-	return resp, err
+	if err != nil {
+		s.logger.Error("Put key failed | err=[%v]", err)
+		return nil, ErrInternal
+	}
+
+	return &pb.PutResp{}, nil
 }
 
 // Del removes key from the storage.
 func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	s.logger.Debug("Del | key=%v", store.Key(req.GetKey()))
+
 	if !s.initDone {
-		return nil, errors.New("Server not ready")
+		return nil, ErrNotReady
 	}
+
 	err := s.shardMgr.Del(req.GetKey())
-	resp := &pb.DelResp{}
-	return resp, err
+	if err != nil {
+		s.logger.Error("Delete key failed | err=[%v]", err)
+		return nil, ErrInternal
+	}
+
+	return &pb.DelResp{}, nil
 }
 
 // ----------------------------
@@ -151,15 +171,15 @@ func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 // RequestVote invoked by candidates to gather votes.
 func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
 	if !s.initDone {
-		return nil, errors.New("Server not ready")
+		return nil, ErrNotReady
 	}
-	return s.raftEngine.RequestVoteHandler(req)
+	return s.raftEngine.RequestVoteHandler(req), nil
 }
 
 // AppendEntries invoked by leader to replicate log entries, also used as heartbeat.
 func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
 	if !s.initDone {
-		return nil, errors.New("Server not ready")
+		return nil, ErrNotReady
 	}
-	return s.raftEngine.AppendEntriesHandler(req)
+	return s.raftEngine.AppendEntriesHandler(req), nil
 }

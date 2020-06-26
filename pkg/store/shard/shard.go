@@ -38,18 +38,22 @@ func New(logLevel int, rootdir string, flushThresh store.KVLen, blockSize store.
 func (s *Shard) Get(key store.Key) (*store.Entry, error) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
+
 	// search MemStore
 	if entry := s.mem.Get(key); entry != nil {
 		return entry, nil
 	}
+
 	// search FileStores from newest to oldest
 	for i := len(s.files) - 1; i >= 0; i-- {
 		if entry, err := s.files[i].Get(key); err != nil {
-			return nil, fmt.Errorf("Read FileStore failed | rootdir=%v | index=%v | err=[%w]", s.rootdir, i, err)
+			return nil, fmt.Errorf("Read FileStore failed | key=%v | index=%v | rootdir=%v | err=[%w]",
+				key, i, s.rootdir, err)
 		} else if entry != nil {
 			return entry, nil
 		}
 	}
+
 	return nil, nil
 }
 
@@ -57,14 +61,17 @@ func (s *Shard) Get(key store.Key) (*store.Entry, error) {
 func (s *Shard) Put(key store.Key, val store.Value) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
 	// write MemStore
 	s.mem.Put(key, val)
+
 	// check flush
 	if s.mem.Size() >= s.flushThresh {
 		if err := s.flush(); err != nil {
-			return fmt.Errorf("Flush failed | rootdir=%v | err=[%w]", s.rootdir, err)
+			return fmt.Errorf("Flush failed | key=%v | val=%v | rootdir=%v | err=[%w]", key, val, s.rootdir, err)
 		}
 	}
+
 	return nil
 }
 
@@ -72,26 +79,32 @@ func (s *Shard) Put(key store.Key, val store.Value) error {
 func (s *Shard) Del(key store.Key) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
 	// write MemStore
 	s.mem.Del(key)
+
 	// check flush
 	if s.mem.Size() >= s.flushThresh {
 		if err := s.flush(); err != nil {
-			return fmt.Errorf("Flush failed | rootdir=%v | err=[%w]", s.rootdir, err)
+			return fmt.Errorf("Flush failed | key=%v | rootdir=%v | err=[%w]", key, s.rootdir, err)
 		}
 	}
+
 	return nil
 }
 
 func (s *Shard) flush() error {
 	filePath := s.nextFilePath()
+
 	fs, err := filestore.New(s.logger.Level(), filePath, s.mem)
 	if err != nil {
 		return fmt.Errorf("Create FileStore failed | path=%v | err=[%w]", filePath, err)
 	}
+
 	fs.BeginFlush(s.blockSize)
 	s.files = append(s.files, fs)
 	s.mem = memstore.New(s.logger.Level())
+
 	return nil
 }
 

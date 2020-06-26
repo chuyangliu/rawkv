@@ -38,7 +38,7 @@ func New(logLevel int, rootdir string, flushThresh store.KVLen, blockSize store.
 func (m *Manager) Get(key []byte) (store.Value, bool, error) {
 	entry, err := m.shards[0].Get(store.Key(key))
 	if err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("Get key from shard failed | err=[%w]", err)
 	} else if entry == nil || entry.Stat == store.KStatDel {
 		return "", false, nil
 	}
@@ -47,18 +47,38 @@ func (m *Manager) Get(key []byte) (store.Value, bool, error) {
 
 // Put adds or updates a key-value pair to the shards.
 func (m *Manager) Put(key []byte, val []byte) error {
-	if m.raftEngine == nil { // no raft cluster, perform the operation locally
-		return m.shards[0].Put(store.Key(key), store.Value(val))
+	var err error
+
+	if m.raftEngine == nil {
+		// no raft cluster, put key/val locally
+		err = m.shards[0].Put(store.Key(key), store.Value(val))
+	} else {
+		err = m.raftEngine.Persist(raft.NewPutLog(key, val))
 	}
-	return m.raftEngine.Persist(raft.NewPutLog(key, val))
+
+	if err != nil {
+		return fmt.Errorf("Put key to shard failed | err=[%w]", err)
+	}
+
+	return nil
 }
 
 // Del removes key from the shards.
 func (m *Manager) Del(key []byte) error {
-	if m.raftEngine == nil { // no raft cluster, perform the operation locally
-		return m.shards[0].Del(store.Key(key))
+	var err error
+
+	if m.raftEngine == nil {
+		// no raft cluster, delete key locally
+		err = m.shards[0].Del(store.Key(key))
+	} else {
+		err = m.raftEngine.Persist(raft.NewDelLog(key))
 	}
-	return m.raftEngine.Persist(raft.NewDelLog(key))
+
+	if err != nil {
+		return fmt.Errorf("Delete key from shard failed | err=[%w]", err)
+	}
+
+	return nil
 }
 
 func (m *Manager) applyRaftLog(log *raft.Log) error {

@@ -254,7 +254,7 @@ func (e *Engine) Run() error {
 }
 
 // RequestVoteHandler handles received RequestVote RPC.
-func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
+func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) *pb.RequestVoteResp {
 
 	resp := &pb.RequestVoteResp{
 		Term:        e.currentTerm,
@@ -263,14 +263,14 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 
 	if req.GetTerm() < e.currentTerm {
 		e.logger.Info("RequestVote received from older term | req=%v | states=%v", req, e)
-		return resp, nil
+		return resp
 	}
 
 	if req.GetTerm() > e.currentTerm {
 		e.logger.Info("RequestVote received from newer term: convert to follower | req=%v | states=%v", req, e)
 		if err := e.convertToFollower(req.GetTerm()); err != nil {
 			e.logger.Error("Convert to follower failed | err=[%v]", err)
-			return resp, nil
+			return resp
 		}
 	}
 
@@ -278,14 +278,14 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) (*pb.RequestVoteResp
 		e.atLeastUpToDate(req.LastLogIndex, req.LastLogTerm) {
 		if err := e.setVotedFor(req.CandidateID); err != nil {
 			e.logger.Error("Vote candidate failed | req=%v | err=[%v]", req, err)
-			return resp, nil
+			return resp
 		}
 		resp.VoteGranted = true
 		e.cancelElectionTimeout <- true
 	}
 
 	e.logger.Info("RequestVote handled | req=%v | resp=%v | states=%v", req, resp, e)
-	return resp, nil
+	return resp
 }
 
 func (e *Engine) atLeastUpToDate(lastLogIndex uint64, lastLogTerm uint64) bool {
@@ -297,7 +297,7 @@ func (e *Engine) atLeastUpToDate(lastLogIndex uint64, lastLogTerm uint64) bool {
 }
 
 // AppendEntriesHandler handles received AppendEntries RPC.
-func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
+func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) *pb.AppendEntriesResp {
 
 	resp := &pb.AppendEntriesResp{
 		Term:    e.currentTerm,
@@ -306,14 +306,14 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 
 	if req.GetTerm() < e.currentTerm {
 		e.logger.Info("AppendEntries received from older term | req=%v | states=%v", req, e)
-		return resp, nil
+		return resp
 	}
 
 	if req.GetTerm() > e.currentTerm || e.role == roleCandidate {
 		e.logger.Info("AppendEntries received from newer term: convert to follower | req=%v | states=%v", req, e)
 		if err := e.convertToFollower(req.GetTerm()); err != nil {
 			e.logger.Error("Convert to follower failed | err=[%v]", err)
-			return resp, nil
+			return resp
 		}
 	}
 
@@ -328,7 +328,7 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 	prevLogIndex := req.GetPrevLogIndex()
 	if prevLogIndex >= uint64(len(e.logs)) || e.logs[prevLogIndex].entry.GetTerm() != req.GetPrevLogTerm() {
 		e.logger.Info("AppendEntries logs did not match | req=%v | states=%v", req, e)
-		return resp, nil
+		return resp
 	}
 
 	index := prevLogIndex + 1
@@ -340,14 +340,14 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 		if index >= uint64(len(e.logs)) {
 			if err := e.appendLog(newLogFromPb(entry)); err != nil {
 				e.logger.Error("Append log failed | err=[%v]", err)
-				return resp, nil
+				return resp
 			}
 		} else {
 			if entry.GetTerm() != e.logs[index].entry.GetTerm() {
 				// conflict entry (same index but different terms), delete the existing entry and all that follow it
 				if err := e.truncateAndAppendLog(newLogFromPb(entry)); err != nil {
 					e.logger.Error("Truncate and append log failed | err=[%v]", err)
-					return resp, nil
+					return resp
 				}
 			}
 		}
@@ -358,13 +358,13 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) (*pb.AppendEntri
 		e.commitIndex = min(req.GetLeaderCommit(), uint64(len(e.logs)-1))
 		if err := e.apply(); err != nil {
 			e.logger.Error("Apply failed | err=[%w]", err)
-			return resp, nil
+			return resp
 		}
 	}
 
 	resp.Success = true
 	e.logger.Debug("AppendEntries handled | req=%v | resp=%v | states=%v", req, resp, e)
-	return resp, nil
+	return resp
 }
 
 func (e *Engine) appendLog(log *Log) error {
@@ -561,7 +561,7 @@ func (e *Engine) Persist(log *Log) error {
 
 	// append log to disk
 	if err := e.appendLog(log); err != nil {
-		return fmt.Errorf("Append log failed | err=[%w]", err)
+		return fmt.Errorf("Append log failed | log=%v | err=[%w]", log, err)
 	}
 
 	// add persist task to queue
@@ -574,7 +574,7 @@ func (e *Engine) Persist(log *Log) error {
 
 	// wait task completion
 	if !<-task.done {
-		return task.err
+		return fmt.Errorf("Persist log task failed | log=%v | err=[%w]", log, task.err)
 	}
 
 	return nil
