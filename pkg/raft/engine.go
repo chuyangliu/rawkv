@@ -114,6 +114,16 @@ func (e *Engine) SetApplyFunc(f ApplyFunc) {
 	e.applyFunc = f
 }
 
+// LeaderID returns the current node id of the leader.
+func (e *Engine) LeaderID() int32 {
+	return e.leaderID
+}
+
+// IsLeader returns whether current node is the leader.
+func (e *Engine) IsLeader() bool {
+	return e.role == roleLeader
+}
+
 func (e *Engine) init() error {
 
 	// init persistent state: currentTerm
@@ -732,7 +742,6 @@ func (e *Engine) convertToFollower(newTerm uint64) error {
 	if err := e.setCurrentTerm(newTerm); err != nil {
 		return fmt.Errorf("Set new currentTerm failed | newTerm=%v | err=[%w]", newTerm, err)
 	}
-	e.leaderID = e.clusterMeta.NodeIDNil()
 	e.role = roleFollower
 	return nil
 }

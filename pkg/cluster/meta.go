@@ -12,6 +12,8 @@ type Meta interface {
 	NodeIDSelf() int32
 	// Size returns the number of nodes in the cluster.
 	Size() int32
-	// RaftClient returns the grpc raft client to communicate with the node with given id.
+	// StorageClient returns the storage grpc client to communicate with the node with given id.
+	StorageClient(id int32) pb.StorageClient
+	// RaftClient returns the raft grpc client to communicate with the node with given id.
 	RaftClient(id int32) pb.RaftClient
 }

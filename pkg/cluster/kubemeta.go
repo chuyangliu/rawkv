@@ -21,16 +21,18 @@ const (
 	envPodName     = "RAWKV_POD_NAME"
 	envServiceName = "RAWKV_SERVICE_NAME"
 	envNamespace   = "RAWKV_NAMESPACE"
+	envStoragePort = "RAWKV_STORAGE_PORT"
 	envRaftPort    = "RAWKV_RAFT_PORT"
 )
 
 // KubeMeta implements Meta interface for a kubernetes cluster.
 // An example of cluster config can be found at kubernetes/rawkv.yaml.
 type KubeMeta struct {
-	logger      *logging.Logger
-	id          int32           // current node id
-	size        int32           // number of nodes in the cluster
-	raftClients []pb.RaftClient // grpc raft clients to communicate with other nodes (indexed by node id)
+	logger         *logging.Logger
+	id             int32              // current node id
+	size           int32              // number of nodes in the cluster
+	storageClients []pb.StorageClient // storage grpc clients to communicate with other nodes (indexed by node id)
+	raftClients    []pb.RaftClient    // raft grpc clients to communicate with other nodes (indexed by node id)
 }
 
 // NewKubeMeta instantiates a new KubeMeta.
@@ -59,6 +61,7 @@ func (km *KubeMeta) init() error {
 	if len(podName) == 0 {
 		return fmt.Errorf("Get pod name failed | env=%v | val=%v", envPodName, podName)
 	}
+	km.logger.Info("Read pod name env | val=%v", podName)
 
 	// get current node id
 	pos := strings.LastIndex(podName, "-")
@@ -76,12 +79,14 @@ func (km *KubeMeta) init() error {
 	if len(serviceName) == 0 {
 		return fmt.Errorf("Get service name failed | env=%v | val=%v", envServiceName, serviceName)
 	}
+	km.logger.Info("Read service name env | val=%v", serviceName)
 
 	// get namespace
 	namespace := os.Getenv(envNamespace)
 	if len(namespace) == 0 {
 		return fmt.Errorf("Get namespace failed | env=%v | val=%v", envNamespace, namespace)
 	}
+	km.logger.Info("Read namespace env | val=%v", namespace)
 
 	// init cluster size
 	if err := km.initSize(namespace); err != nil {
@@ -93,15 +98,28 @@ func (km *KubeMeta) init() error {
 	addrFmt := fmt.Sprintf("%s.%s.%s.%s.%s:%s",
 		podName[:pos+1]+"%v", serviceName, namespace, "svc", "cluster.local", "%v")
 
+	// get port number of storage grpc server
+	storagePort := os.Getenv(envStoragePort)
+	if len(storagePort) == 0 {
+		return fmt.Errorf("Get storage port failed | env=%v | val=%v", envStoragePort, storagePort)
+	}
+	km.logger.Info("Read storage port env | val=%v", storagePort)
+
 	// get port number of raft grpc server
 	raftPort := os.Getenv(envRaftPort)
 	if len(raftPort) == 0 {
 		return fmt.Errorf("Get raft port failed | env=%v | val=%v", envRaftPort, raftPort)
 	}
+	km.logger.Info("Read raft port env | val=%v", raftPort)
 
-	// establish grpc connections with other raft nodes in the cluster
+	// establish grpc connections with other storage servers in the cluster
+	if err := km.initStorageClients(addrFmt, storagePort); err != nil {
+		return fmt.Errorf("Create storage grpc clients failed | err=[%w]", err)
+	}
+
+	// establish grpc connections with other raft servers in the cluster
 	if err := km.initRaftClients(addrFmt, raftPort); err != nil {
-		return fmt.Errorf("Create grpc clients failed | err=[%w]", err)
+		return fmt.Errorf("Create raft grpc clients failed | err=[%w]", err)
 	}
 
 	return nil
@@ -136,6 +154,21 @@ func (km *KubeMeta) initSize(namespace string) error {
 	return nil
 }
 
+func (km *KubeMeta) initStorageClients(addrFmt string, storagePort string) error {
+	km.storageClients = make([]pb.StorageClient, km.size)
+	for id := int32(0); id < km.size; id++ {
+		if id != km.id {
+			targetAddr := fmt.Sprintf(addrFmt, id, storagePort)
+			conn, err := grpc.Dial(targetAddr, grpc.WithInsecure(), grpc.WithBlock())
+			if err != nil {
+				return fmt.Errorf("Connect storage grpc server failed | targetAddr=%v | err=[%w]", targetAddr, err)
+			}
+			km.storageClients[id] = pb.NewStorageClient(conn)
+		}
+	}
+	return nil
+}
+
 func (km *KubeMeta) initRaftClients(addrFmt string, raftPort string) error {
 	km.raftClients = make([]pb.RaftClient, km.size)
 	for id := int32(0); id < km.size; id++ {
@@ -143,7 +176,7 @@ func (km *KubeMeta) initRaftClients(addrFmt string, raftPort string) error {
 			targetAddr := fmt.Sprintf(addrFmt, id, raftPort)
 			conn, err := grpc.Dial(targetAddr, grpc.WithInsecure(), grpc.WithBlock())
 			if err != nil {
-				return fmt.Errorf("Connect raft server failed | targetAddr=%v | err=[%w]", targetAddr, err)
+				return fmt.Errorf("Connect raft grpc server failed | targetAddr=%v | err=[%w]", targetAddr, err)
 			}
 			km.raftClients[id] = pb.NewRaftClient(conn)
 		}
@@ -170,7 +203,12 @@ func (km *KubeMeta) Size() int32 {
 	return km.size
 }
 
-// RaftClient returns the grpc raft client to communicate with the node with given id.
+// StorageClient returns the storage grpc client to communicate with the node with given id.
+func (km *KubeMeta) StorageClient(id int32) pb.StorageClient {
+	return km.storageClients[id]
+}
+
+// RaftClient returns the raft grpc client to communicate with the node with given id.
 func (km *KubeMeta) RaftClient(id int32) pb.RaftClient {
 	return km.raftClients[id]
 }

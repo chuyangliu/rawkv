@@ -9,3 +9,7 @@ var ErrNotReady error = errors.New("Serve not ready")
 
 // ErrInternal indicates there is something wrong during server's internal processing.
 var ErrInternal error = errors.New("Internal server error (please see server's logs for more details)")
+
+// ErrLeaderNotFound indicates the node that receives the request is not the leader and it does not know where the
+// leader is.
+var ErrLeaderNotFound error = errors.New("Leader not found (please try again)")

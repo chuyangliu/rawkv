@@ -120,7 +120,7 @@ func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 
 	val, found, err := s.shardMgr.Get(req.GetKey())
 	if err != nil {
-		s.logger.Error("Get key failed | err=[%v]", err)
+		s.logger.Error("Get key failed | key=%v | err=[%v]", store.Key(req.GetKey()), err)
 		return nil, ErrInternal
 	}
 
@@ -138,9 +138,18 @@ func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 		return nil, ErrNotReady
 	}
 
+	if !s.raftEngine.IsLeader() {
+		leaderID := s.raftEngine.LeaderID()
+		if leaderID == s.clusterMeta.NodeIDNil() {
+			return nil, ErrLeaderNotFound
+		}
+		return s.redirectPut(leaderID, req)
+	}
+
 	err := s.shardMgr.Put(req.GetKey(), req.GetVal())
 	if err != nil {
-		s.logger.Error("Put key failed | err=[%v]", err)
+		s.logger.Error("Put key failed | key=%v | val=%v | err=[%v]",
+			store.Key(req.GetKey()), store.Value(req.GetVal()), err)
 		return nil, ErrInternal
 	}
 
@@ -155,6 +164,14 @@ func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 		return nil, ErrNotReady
 	}
 
+	if !s.raftEngine.IsLeader() {
+		leaderID := s.raftEngine.LeaderID()
+		if leaderID == s.clusterMeta.NodeIDNil() {
+			return nil, ErrLeaderNotFound
+		}
+		return s.redirectDel(leaderID, req)
+	}
+
 	err := s.shardMgr.Del(req.GetKey())
 	if err != nil {
 		s.logger.Error("Delete key failed | err=[%v]", err)
@@ -162,6 +179,19 @@ func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	}
 
 	return &pb.DelResp{}, nil
+}
+
+func (s *Server) redirectPut(id int32, req *pb.PutReq) (*pb.PutResp, error) {
+	resp, err := s.clusterMeta.StorageClient(id).Put(context.Background(), req)
+	s.logger.Debug("Redirected put request | key=%v | val=%v | err=[%v]",
+		store.Key(req.GetKey()), store.Value(req.GetVal()), err)
+	return resp, err
+}
+
+func (s *Server) redirectDel(id int32, req *pb.DelReq) (*pb.DelResp, error) {
+	resp, err := s.clusterMeta.StorageClient(id).Del(context.Background(), req)
+	s.logger.Debug("Redirected delete request | key=%v | err=[%v]", store.Key(req.GetKey()), err)
+	return resp, err
 }
 
 // ----------------------------
