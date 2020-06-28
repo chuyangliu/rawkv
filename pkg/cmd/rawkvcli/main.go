@@ -5,10 +5,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/chuyangliu/rawkv/pkg/pb"
+)
+
+const (
+	retryInterval int64 = 5 // seconds
 )
 
 func main() {
@@ -59,58 +64,77 @@ func printUsage() {
 }
 
 func execGet(addr string, key string) {
-	fmt.Printf("[Get %v]\nKey=\"%v\"\n", addr, key)
+	fmt.Printf("[Get] key=%v | addr=%v\n", key, addr)
 
 	conn, err := grpc.Dial(addr, grpc.WithInsecure())
 	if err != nil {
 		panic(err)
 	}
 	defer conn.Close()
+
 	client := pb.NewStorageClient(conn)
-
 	req := &pb.GetReq{Key: []byte(key)}
-	resp, err := client.Get(context.Background(), req)
-	if err != nil {
-		panic(err)
-	}
 
-	fmt.Printf("Value=\"%v\"\nFound=%v\n", string(resp.Val), resp.Found)
+	for i := 0; true; i++ {
+		fmt.Printf("Sending request #%v\n", i+1)
+		if resp, err := client.Get(context.Background(), req); err != nil {
+			fmt.Printf("Request failed. Retry after %v second | err=[%v]\n", retryInterval, err)
+			time.Sleep(time.Duration(retryInterval) * time.Second)
+		} else {
+			if resp.Found {
+				fmt.Printf("Found value: %v\n", string(resp.Val))
+			} else {
+				fmt.Printf("Key not found!\n")
+			}
+			break
+		}
+	}
 }
 
 func execPut(addr string, key string, val string) {
-	fmt.Printf("[Put %v]\nKey=\"%v\"\nValue=\"%v\"\n", addr, key, val)
+	fmt.Printf("[Put] key=%v | val=%v | addr=%v\n", key, val, addr)
 
 	conn, err := grpc.Dial(addr, grpc.WithInsecure())
 	if err != nil {
 		panic(err)
 	}
 	defer conn.Close()
+
 	client := pb.NewStorageClient(conn)
-
 	req := &pb.PutReq{Key: []byte(key), Val: []byte(val)}
-	_, err = client.Put(context.Background(), req)
-	if err != nil {
-		panic(err)
-	}
 
-	fmt.Println("Success")
+	for i := 0; true; i++ {
+		fmt.Printf("Sending request #%v\n", i+1)
+		if _, err := client.Put(context.Background(), req); err != nil {
+			fmt.Printf("Request failed. Retry after %v second | err=[%v]\n", retryInterval, err)
+			time.Sleep(time.Duration(retryInterval) * time.Second)
+		} else {
+			fmt.Printf("Success!\n")
+			break
+		}
+	}
 }
 
 func execDel(addr string, key string) {
-	fmt.Printf("[Del %v]\nKey=\"%v\"\n", addr, key)
+	fmt.Printf("[Del] key=%v | addr=%v\n", key, addr)
 
 	conn, err := grpc.Dial(addr, grpc.WithInsecure())
 	if err != nil {
 		panic(err)
 	}
 	defer conn.Close()
+
 	client := pb.NewStorageClient(conn)
-
 	req := &pb.DelReq{Key: []byte(key)}
-	_, err = client.Del(context.Background(), req)
-	if err != nil {
-		panic(err)
-	}
 
-	fmt.Println("Success")
+	for i := 0; true; i++ {
+		fmt.Printf("Sending request #%v\n", i+1)
+		if _, err := client.Del(context.Background(), req); err != nil {
+			fmt.Printf("Request failed. Retry after %v second | err=[%v]\n", retryInterval, err)
+			time.Sleep(time.Duration(retryInterval) * time.Second)
+		} else {
+			fmt.Printf("Success!\n")
+			break
+		}
+	}
 }
