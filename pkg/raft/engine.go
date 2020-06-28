@@ -681,7 +681,7 @@ func (e *Engine) replicateAsync(targetID int32, heartbeat bool, errs chan error)
 
 		if !heartbeat {
 			lastLogIndex := uint64(len(e.logs) - 1)
-			for i := uint64(0); i <= lastLogIndex; i++ {
+			for i := nextIndex; i <= lastLogIndex; i++ {
 				req.Entries = append(req.Entries, e.logs[i].entry)
 			}
 		}
