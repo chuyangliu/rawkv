@@ -55,7 +55,7 @@ Use the client binary `rawkvcli` to send requests to the load balancer:
 $ $GOPATH/bin/rawkvcli put -key name -val rawkv -addr 127.0.0.1:30000
 ```
 
-The command above sends a put request to add `(name,rawkv)` key-value pair to RawKV exposed on port `30000`. Use the `-h` option to see more usages of `rawkvcli`.
+The command above sends a put request to add a `(name,rawkv)` key-value pair to RawKV exposed on port `30000`. Use the `-h` option to see more usages of `rawkvcli`.
 
 Stop RawKV services:
 
