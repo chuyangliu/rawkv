@@ -1,4 +1,3 @@
-# kubectl apply -f kubernetes/rawkv.yaml
 apiVersion: v1
 kind: Service
 metadata:
