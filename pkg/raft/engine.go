@@ -23,9 +23,9 @@ const (
 	roleCandidate uint8 = 1
 	roleLeader    uint8 = 2
 
-	electionTimeoutMin int64 = 3000 // ms
-	electionTimeoutMax int64 = 6000 // ms
-	heartbeatInterval  int64 = 1000 // ms
+	electionTimeoutMin int64 = 1500 // ms
+	electionTimeoutMax int64 = 3000 // ms
+	heartbeatInterval  int64 = 500  // ms
 
 	persistQueueLen int = 1000
 )
@@ -68,7 +68,7 @@ type Engine struct {
 	heartbeatTimer *raftTimer
 
 	// channel to cancel follower's election timeout
-	cancelElectionTimeout chan bool
+	electionTimeoutCanceled chan struct{}
 
 	// queue to implement producer and consumer model for persist requests
 	persistQueue chan *persistTask
@@ -161,7 +161,7 @@ func (e *Engine) init() error {
 	e.heartbeatTimer = newRaftTimer(e.logger.Level(), heartbeatInterval)
 
 	// init channels
-	e.cancelElectionTimeout = make(chan bool)
+	e.electionTimeoutCanceled = make(chan struct{})
 
 	// init persist queue
 	e.persistQueue = make(chan *persistTask, persistQueueLen)
@@ -291,7 +291,7 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) *pb.RequestVoteResp 
 			return resp
 		}
 		resp.VoteGranted = true
-		e.cancelElectionTimeout <- true
+		e.cancelElectionTimeout()
 	}
 
 	e.logger.Info("RequestVote handled | req=%v | resp=%v | states=%v", req, resp, e)
@@ -333,7 +333,7 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) *pb.AppendEntrie
 	}
 
 	e.leaderID = req.GetLeaderID()
-	e.cancelElectionTimeout <- true
+	e.cancelElectionTimeout()
 
 	prevLogIndex := req.GetPrevLogIndex()
 	if prevLogIndex >= uint64(len(e.logs)) || e.logs[prevLogIndex].entry.GetTerm() != req.GetPrevLogTerm() {
@@ -429,14 +429,20 @@ func (e *Engine) truncateAndAppendLog(log *Log) error {
 	return nil
 }
 
+func (e *Engine) cancelElectionTimeout() {
+	select {
+	case e.electionTimeoutCanceled <- struct{}{}:
+	default:
+	}
+}
+
 func (e *Engine) follower() {
-	e.cancelElectionTimeout = make(chan bool)
 	e.electionTimer.start()
 	select {
 	case <-e.electionTimer.timeout():
 		e.role = roleCandidate
 		e.logger.Info("Follower timeout: convert to candidate | states=%v", e)
-	case <-e.cancelElectionTimeout:
+	case <-e.electionTimeoutCanceled:
 		e.electionTimer.stop()
 	}
 }
@@ -454,23 +460,17 @@ func (e *Engine) candidate() {
 	}
 
 	e.electionTimer.start()
-	majority := make(chan bool)
+	majority := make(chan struct{})
 	e.requestVotesAsync(majority)
 
 	select {
 	case <-e.electionTimer.timeout():
 		e.logger.Info("Candidate timeout: start new election | states=%v", e)
-	case suc := <-majority:
-		if suc {
-			e.electionTimer.stop()
-			e.role = roleLeader
-			e.leaderID = e.clusterMeta.NodeIDSelf()
-			e.logger.Info("Candidate received votes from majority: new leader elected | states=%v", e)
-		} else {
-			// not receive majority, wait timeout before starting new election
-			<-e.electionTimer.timeout()
-			e.logger.Info("Candidate failed to receive votes from majority: start new election | states=%v", e)
-		}
+	case <-majority:
+		e.electionTimer.stop()
+		e.role = roleLeader
+		e.leaderID = e.clusterMeta.NodeIDSelf()
+		e.logger.Info("Candidate received votes from majority: new leader elected | states=%v", e)
 	}
 }
 
@@ -512,10 +512,10 @@ func (e *Engine) setVotedFor(nodeID int32) error {
 	return nil
 }
 
-func (e *Engine) requestVotesAsync(majority chan bool) {
+func (e *Engine) requestVotesAsync(majority chan struct{}) {
 	go func() {
 
-		votes := make(chan bool)
+		votes := make(chan bool, e.clusterMeta.Size()-1)
 		for id := int32(0); id < e.clusterMeta.Size(); id++ {
 			if id != e.clusterMeta.NodeIDSelf() {
 				e.requestVoteAsync(id, votes)
@@ -526,10 +526,12 @@ func (e *Engine) requestVotesAsync(majority chan bool) {
 		for id := int32(0); id < e.clusterMeta.Size(); id++ {
 			if id != e.clusterMeta.NodeIDSelf() && <-votes {
 				numGrant++
+				if e.isMajority(numGrant) {
+					majority <- struct{}{}
+					return
+				}
 			}
 		}
-
-		majority <- e.isMajority(numGrant)
 	}()
 }
 
