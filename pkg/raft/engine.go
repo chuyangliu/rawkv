@@ -71,13 +71,7 @@ type Engine struct {
 	electionTimeoutCanceled chan struct{}
 
 	// queue to implement producer and consumer model for persist requests
-	persistQueue chan *persistTask
-}
-
-type persistTask struct {
-	logIndex uint64
-	done     chan bool
-	err      error
+	queue *persistQueue
 }
 
 // NewEngine instantiates an Engine.
@@ -164,7 +158,7 @@ func (e *Engine) init() error {
 	e.electionTimeoutCanceled = make(chan struct{})
 
 	// init persist queue
-	e.persistQueue = make(chan *persistTask, persistQueueLen)
+	e.queue = newPersistQueue(persistQueueLen)
 
 	return nil
 }
@@ -548,11 +542,12 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 
 		resp, err := e.clusterMeta.RaftClient(targetID).RequestVote(context.Background(), req)
 		if err != nil {
-			e.logger.Error("RequestVote failed | targetID=%v | req=%v | states=%v | err=[%v]", targetID, req, e, err)
+			e.logger.Error("RequestVote RPC failed | targetID=%v | req=%v | states=%v | err=[%v]",
+				targetID, req, e, err)
 			votes <- false
 			return
 		}
-		e.logger.Info("RequestVote sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
+		e.logger.Info("RequestVote RPC sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
 
 		if resp.GetTerm() > e.currentTerm {
 			if err := e.convertToFollower(resp.GetTerm()); err != nil {
@@ -577,12 +572,8 @@ func (e *Engine) Persist(log *Log) error {
 	}
 
 	// add persist task to queue
-	task := &persistTask{
-		logIndex: log.entry.Index,
-		done:     make(chan bool),
-		err:      nil,
-	}
-	e.persistQueue <- task
+	task := newPersistTask(log.entry.Index)
+	e.queue.push(task)
 
 	// wait task completion
 	if !<-task.done {
@@ -594,66 +585,55 @@ func (e *Engine) Persist(log *Log) error {
 
 func (e *Engine) leader() {
 	for e.role == roleLeader {
-		heartbeat := false
 		task := (*persistTask)(nil)
 
 		e.heartbeatTimer.start()
 		select {
 		case <-e.heartbeatTimer.timeout():
-			heartbeat = true
-		case task, _ = <-e.persistQueue:
+		case task, _ = <-e.queue.pop():
 			e.heartbeatTimer.stop()
 		}
 
-		if !heartbeat && e.lastApplied >= task.logIndex {
+		if task != nil && e.lastApplied >= task.logIndex {
 			task.done <- true
 			continue
 		}
 
-		if err := e.replicate(heartbeat); err != nil {
-			if !heartbeat {
+		if err := e.appendEntries(); err != nil {
+			if task != nil {
 				task.err = err
 				task.done <- false
 			}
-			e.logger.Error("Replicate logs failed | heartbeat=%v | task=%v | err=[%v]", heartbeat, task, err)
+			e.logger.Error("AppendEntries failed | task=%v | err=[%v]", task, err)
 			continue
 		}
 
-		if !heartbeat {
-			if err := e.apply(); err != nil {
+		if err := e.apply(); err != nil {
+			if task != nil {
 				task.err = err
 				task.done <- false
-				e.logger.Error("Apply logs failed | task=%v | err=[%v]", task, err)
-				continue
 			}
+			e.logger.Error("Apply logs failed | task=%v | err=[%v]", task, err)
+			continue
+		}
 
+		if task != nil {
 			if e.lastApplied < task.logIndex {
 				panic(fmt.Sprintf("Expect persist task log applied (error most likely caused by incorrect raft"+
 					" implementation) | task=%v | states=%v", task, e))
 			}
-
 			task.done <- true
 		}
 	}
 	e.logger.Info("Leader exited | states=%v", e)
 }
 
-func (e *Engine) apply() error {
-	for ; e.commitIndex > e.lastApplied; e.lastApplied++ {
-		log := e.logs[e.lastApplied+1]
-		if err := e.applyFunc(log); err != nil {
-			return fmt.Errorf("Apply log failed | log=%v | states=%v | err=[%w]", log, e, err)
-		}
-	}
-	return nil
-}
-
-func (e *Engine) replicate(heartbeat bool) error {
+func (e *Engine) appendEntries() error {
 	errs := make(chan error)
 
 	for id := int32(0); id < e.clusterMeta.Size(); id++ {
 		if id != e.clusterMeta.NodeIDSelf() {
-			e.replicateAsync(id, heartbeat, errs)
+			e.appendEntriesAsync(id, errs)
 		}
 	}
 
@@ -668,7 +648,7 @@ func (e *Engine) replicate(heartbeat bool) error {
 	return nil
 }
 
-func (e *Engine) replicateAsync(targetID int32, heartbeat bool, errs chan error) {
+func (e *Engine) appendEntriesAsync(targetID int32, errs chan error) {
 	go func() {
 		nextIndex := e.nextIndex[targetID]
 		prevLog := e.logs[nextIndex-1]
@@ -681,20 +661,18 @@ func (e *Engine) replicateAsync(targetID int32, heartbeat bool, errs chan error)
 			LeaderCommit: e.commitIndex,
 		}
 
-		if !heartbeat {
-			lastLogIndex := uint64(len(e.logs) - 1)
-			for i := nextIndex; i <= lastLogIndex; i++ {
-				req.Entries = append(req.Entries, e.logs[i].entry)
-			}
+		lastLogIndex := uint64(len(e.logs) - 1)
+		for i := nextIndex; i <= lastLogIndex; i++ {
+			req.Entries = append(req.Entries, e.logs[i].entry)
 		}
 
 		resp, err := e.clusterMeta.RaftClient(targetID).AppendEntries(context.Background(), req)
 		if err != nil {
-			errs <- fmt.Errorf("AppendEntries failed | targetID=%v | req=%v | states=%v | err=[%v]",
+			errs <- fmt.Errorf("AppendEntries RPC failed | targetID=%v | req=%v | states=%v | err=[%v]",
 				targetID, req, e, err)
 			return
 		}
-		e.logger.Debug("AppendEntries sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
+		e.logger.Debug("AppendEntries RPC sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
 
 		if resp.GetTerm() > e.currentTerm {
 			if err := e.convertToFollower(resp.GetTerm()); err != nil {
@@ -735,6 +713,16 @@ func (e *Engine) commit(begIndex uint64, endIndex uint64) {
 			}
 		}
 	}
+}
+
+func (e *Engine) apply() error {
+	for ; e.commitIndex > e.lastApplied; e.lastApplied++ {
+		log := e.logs[e.lastApplied+1]
+		if err := e.applyFunc(log); err != nil {
+			return fmt.Errorf("Apply log failed | log=%v | states=%v | err=[%w]", log, e, err)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) convertToFollower(newTerm uint64) error {

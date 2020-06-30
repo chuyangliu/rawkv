@@ -95,7 +95,7 @@ func newLogFromFile(reader io.Reader) (*Log, error) {
 			return nil, fmt.Errorf("Read log value length failed | err=[%w]", err)
 		}
 
-		val := make([]byte, keyLen)
+		val := make([]byte, valLen)
 		if _, err := io.ReadFull(reader, val); err != nil {
 			return nil, fmt.Errorf("Read log value failed | err=[%w]", err)
 		}
