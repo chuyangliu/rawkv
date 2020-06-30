@@ -7,7 +7,7 @@ RawKV is a cloud-native distributed key-value database aiming to run on Kubernet
 - Arbitrary raw bytes as keys and values
 - Single-row transactions
 - Reliable data replication with Raft consensus algorithm
-- Storage engine based on log-structured merge-tree
+- Write-optimized storage engine based on log-structured merge-tree
 
 ## Installation
 
