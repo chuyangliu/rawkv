@@ -83,6 +83,8 @@ func (m *Manager) Del(key []byte) error {
 
 func (m *Manager) applyRaftLog(log *raft.Log) error {
 	switch log.Cmd() {
+	case raft.CmdNoOp:
+		return nil
 	case raft.CmdPut:
 		return m.shards[0].Put(log.Key(), log.Val())
 	case raft.CmdDel:

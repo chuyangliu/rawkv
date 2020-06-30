@@ -583,7 +583,22 @@ func (e *Engine) Persist(log *Log) error {
 	return nil
 }
 
+func (e *Engine) persistNoOpAsync() {
+	go func() {
+		for {
+			if err := e.Persist(newNoOpLog()); err != nil {
+				e.logger.Error("Persist no-op log failed. Retrying | states=%v | err=[%v]", e, err)
+			} else {
+				e.logger.Info("No-op log entry persisted | states=%v", e)
+				break
+			}
+		}
+	}()
+}
+
 func (e *Engine) leader() {
+	e.persistNoOpAsync()
+
 	for e.role == roleLeader {
 		task := (*persistTask)(nil)
 
@@ -625,6 +640,7 @@ func (e *Engine) leader() {
 			task.done <- true
 		}
 	}
+
 	e.logger.Info("Leader exited | states=%v", e)
 }
 

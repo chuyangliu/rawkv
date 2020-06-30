@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	// CmdPut stores enum value of put operation.
-	CmdPut uint32 = 0
-	// CmdDel stores enum value of delete operation.
-	CmdDel uint32 = 1
+	// CmdNoOp stores enum value of no-op command.
+	CmdNoOp uint32 = 0
+	// CmdPut stores enum value of put command.
+	CmdPut uint32 = 1
+	// CmdDel stores enum value of delete command.
+	CmdDel uint32 = 2
 )
 
 // Log represents raft replicated log entry.
@@ -22,7 +24,15 @@ type Log struct {
 	entry *pb.AppendEntriesReq_LogEntry
 }
 
-// NewPutLog creates a new raft log to store put operation.
+func newNoOpLog() *Log {
+	return &Log{
+		entry: &pb.AppendEntriesReq_LogEntry{
+			Cmd: CmdNoOp,
+		},
+	}
+}
+
+// NewPutLog creates a new raft log to store put command.
 func NewPutLog(key []byte, val []byte) *Log {
 	return &Log{
 		entry: &pb.AppendEntriesReq_LogEntry{
@@ -33,7 +43,7 @@ func NewPutLog(key []byte, val []byte) *Log {
 	}
 }
 
-// NewDelLog creates a new raft log to store delete operation.
+// NewDelLog creates a new raft log to store delete command.
 func NewDelLog(key []byte) *Log {
 	return &Log{
 		entry: &pb.AppendEntriesReq_LogEntry{
