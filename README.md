@@ -5,7 +5,6 @@
 RawKV is a cloud-native distributed key-value database aiming to run on Kubernetes clusters, with supports on the things below:
 
 - Arbitrary raw bytes as keys and values
-- Single-row transactions
 - Reliable data replication with Raft consensus algorithm
 - Write-optimized storage engine based on log-structured merge-tree
 
