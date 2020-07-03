@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"sync"
 	"time"
 
 	"github.com/chuyangliu/rawkv/pkg/cluster"
@@ -48,7 +47,7 @@ type Engine struct {
 	clusterMeta cluster.Meta
 
 	// mutex lock to protect concurrent modifications to states
-	lock sync.Mutex
+	// lock sync.Mutex
 
 	// function provided by user to apply a given raft log to state machine
 	applyFunc ApplyFunc
@@ -242,15 +241,15 @@ func (e *Engine) SetApplyFunc(f ApplyFunc) {
 
 // LeaderID returns the current node id of the leader.
 func (e *Engine) LeaderID() int32 {
-	e.lock.Lock()
-	defer e.lock.Unlock()
+	// e.lock.Lock()
+	// defer e.lock.Unlock()
 	return e.leaderID
 }
 
 // IsLeader returns whether current node is the leader.
 func (e *Engine) IsLeader() bool {
-	e.lock.Lock()
-	defer e.lock.Unlock()
+	// e.lock.Lock()
+	// defer e.lock.Unlock()
 	return e.role == roleLeader
 }
 
@@ -262,8 +261,8 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) *pb.RequestVoteResp 
 		VoteGranted: false,
 	}
 
-	e.lock.Lock()
-	defer e.lock.Unlock()
+	// e.lock.Lock()
+	// defer e.lock.Unlock()
 
 	if req.GetTerm() < e.currentTerm {
 		e.logger.Info("RequestVote received from older term | req=%v | states=%v", req, e)
@@ -308,8 +307,8 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) *pb.AppendEntrie
 		Success: false,
 	}
 
-	e.lock.Lock()
-	defer e.lock.Unlock()
+	// e.lock.Lock()
+	// defer e.lock.Unlock()
 
 	if req.GetTerm() < e.currentTerm {
 		e.logger.Info("AppendEntries received from older term | req=%v | states=%v", req, e)
@@ -455,9 +454,9 @@ func (e *Engine) follower() {
 	e.electionTimer.start()
 	select {
 	case <-e.electionTimer.timeout():
-		e.lock.Lock()
+		// e.lock.Lock()
 		e.role = roleCandidate
-		e.lock.Unlock()
+		// e.lock.Unlock()
 		e.logger.Info("Follower timeout: convert to candidate | states=%v", e)
 	case <-e.electionTimeoutCanceled:
 		e.electionTimer.stop()
@@ -465,21 +464,21 @@ func (e *Engine) follower() {
 }
 
 func (e *Engine) candidate() {
-	e.lock.Lock()
+	// e.lock.Lock()
 
 	if err := e.setCurrentTerm(e.currentTerm + 1); err != nil {
-		e.lock.Unlock()
+		// e.lock.Unlock()
 		e.logger.Error("Increase current term failed | err=[%v]", err)
 		return
 	}
 
 	if err := e.setVotedFor(e.clusterMeta.NodeIDSelf()); err != nil {
-		e.lock.Unlock()
+		// e.lock.Unlock()
 		e.logger.Error("Vote for self failed | err=[%v]", err)
 		return
 	}
 
-	e.lock.Unlock()
+	// e.lock.Unlock()
 
 	e.electionTimer.start()
 	majority := make(chan struct{})
@@ -490,10 +489,10 @@ func (e *Engine) candidate() {
 		e.logger.Info("Candidate timeout: start new election | states=%v", e)
 	case <-majority:
 		e.electionTimer.stop()
-		e.lock.Lock()
+		// e.lock.Lock()
 		e.role = roleLeader
 		e.leaderID = e.clusterMeta.NodeIDSelf()
-		e.lock.Unlock()
+		// e.lock.Unlock()
 		e.logger.Info("Candidate received votes from majority: new leader elected | states=%v", e)
 	}
 }
@@ -561,7 +560,7 @@ func (e *Engine) requestVotesAsync(majority chan struct{}) {
 
 func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 	go func() {
-		e.lock.Lock()
+		// e.lock.Lock()
 		lastLog := e.logs[len(e.logs)-1]
 		req := &pb.RequestVoteReq{
 			Term:         e.currentTerm,
@@ -569,7 +568,7 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 			LastLogIndex: lastLog.entry.GetIndex(),
 			LastLogTerm:  lastLog.entry.GetTerm(),
 		}
-		e.lock.Unlock()
+		// e.lock.Unlock()
 
 		resp, err := e.clusterMeta.RaftClient(targetID).RequestVote(context.Background(), req)
 		if err != nil {
@@ -580,13 +579,13 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 		}
 		e.logger.Info("RequestVote RPC sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
 
-		e.lock.Lock()
+		// e.lock.Lock()
 		if resp.GetTerm() > e.currentTerm {
 			if err := e.convertToFollower(resp.GetTerm()); err != nil {
 				e.logger.Error("Convert to follower failed | err=[%v]", err)
 			}
 		}
-		e.lock.Unlock()
+		// e.lock.Unlock()
 
 		votes <- resp.VoteGranted
 	}()
@@ -594,7 +593,7 @@ func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
 
 // Persist replicates a raft log and applies it to state machine if succeeds.
 func (e *Engine) Persist(log *Log) error {
-	e.lock.Lock()
+	// e.lock.Lock()
 
 	// set log index and term
 	log.entry.Index = uint64(len(e.logs))
@@ -602,11 +601,11 @@ func (e *Engine) Persist(log *Log) error {
 
 	// append log to disk
 	if err := e.appendLog(log); err != nil {
-		e.lock.Unlock()
+		// e.lock.Unlock()
 		return fmt.Errorf("Append log failed | log=%v | err=[%w]", log, err)
 	}
 
-	e.lock.Unlock()
+	// e.lock.Unlock()
 
 	// add persist task to queue
 	task := newPersistTask(log.entry.Index)
@@ -648,13 +647,13 @@ func (e *Engine) leader() {
 			e.heartbeatTimer.stop()
 		}
 
-		e.lock.Lock()
+		// e.lock.Lock()
 		if task != nil && e.lastApplied >= task.logIndex {
-			e.lock.Unlock()
+			// e.lock.Unlock()
 			task.done <- true
 			continue
 		}
-		e.lock.Unlock()
+		// e.lock.Unlock()
 
 		if err := e.appendEntries(); err != nil {
 			if task != nil {
@@ -665,8 +664,8 @@ func (e *Engine) leader() {
 			continue
 		}
 
-		e.lock.Lock()
-		defer e.lock.Unlock()
+		// e.lock.Lock()
+		// defer e.lock.Unlock()
 
 		if err := e.apply(); err != nil {
 			if task != nil {
@@ -711,7 +710,7 @@ func (e *Engine) appendEntries() error {
 
 func (e *Engine) appendEntriesAsync(targetID int32, errs chan error) {
 	go func() {
-		e.lock.Lock()
+		// e.lock.Lock()
 
 		nextIndex := e.nextIndex[targetID]
 		prevLog := e.logs[nextIndex-1]
@@ -729,7 +728,7 @@ func (e *Engine) appendEntriesAsync(targetID int32, errs chan error) {
 			req.Entries = append(req.Entries, e.logs[i].entry)
 		}
 
-		e.lock.Unlock()
+		// e.lock.Unlock()
 
 		resp, err := e.clusterMeta.RaftClient(targetID).AppendEntries(context.Background(), req)
 		if err != nil {
@@ -739,14 +738,15 @@ func (e *Engine) appendEntriesAsync(targetID int32, errs chan error) {
 		}
 		e.logger.Debug("AppendEntries RPC sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
 
-		e.lock.Lock()
-		defer e.lock.Unlock()
+		// e.lock.Lock()
+		// defer e.lock.Unlock()
 
 		if resp.GetTerm() > e.currentTerm {
 			if err := e.convertToFollower(resp.GetTerm()); err != nil {
 				errs <- fmt.Errorf("Convert to follower failed | err=[%w]", err)
+			} else {
+				errs <- nil
 			}
-			errs <- nil
 			return
 		}
 
