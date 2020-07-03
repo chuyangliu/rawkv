@@ -24,13 +24,13 @@ const (
 	roleCandidate uint8 = 1
 	roleLeader    uint8 = 2
 
+	rpcTimeout int64 = 100 // milliseconds
+
 	electionTimeoutMin int64 = 1500 // milliseconds
 	electionTimeoutMax int64 = 3000 // milliseconds
 	heartbeatInterval  int64 = 500  // milliseconds
 
 	persistQueueLen int = 1000
-
-	noOpRetryInterval int64 = 3 // seconds
 )
 
 // ApplyFunc applies a raft log to state machine.
@@ -135,11 +135,9 @@ func (e *Engine) init() error {
 	e.lastApplied = 0
 
 	// init volatile states on leaders
-	e.matchIndex = make([]uint64, e.clusterMeta.Size())
 	e.nextIndex = make([]uint64, e.clusterMeta.Size())
-	for i := range e.nextIndex {
-		e.nextIndex[i] = 1
-	}
+	e.matchIndex = make([]uint64, e.clusterMeta.Size())
+	e.initLeaderStates()
 
 	// init metadata
 	e.role = roleFollower
@@ -232,6 +230,15 @@ func (e *Engine) initLogs(filePath string) error {
 	}
 
 	return nil
+}
+
+func (e *Engine) initLeaderStates() {
+	// e.lock.Lock()
+	// defer e.lock.Unlock()
+	for i := range e.nextIndex {
+		e.nextIndex[i] = uint64(len(e.logs))
+		e.matchIndex[i] = 0
+	}
 }
 
 // SetApplyFunc sets raft log apply function to f.
@@ -482,7 +489,7 @@ func (e *Engine) candidate() {
 
 	e.electionTimer.start()
 	majority := make(chan struct{})
-	e.requestVotesAsync(majority)
+	go e.broadcastRequestVote(majority)
 
 	select {
 	case <-e.electionTimer.timeout():
@@ -535,60 +542,66 @@ func (e *Engine) setVotedFor(nodeID int32) error {
 	return nil
 }
 
-func (e *Engine) requestVotesAsync(majority chan struct{}) {
-	go func() {
+func (e *Engine) broadcastRequestVote(majority chan struct{}) {
+	votes := make(chan bool)
 
-		votes := make(chan bool, e.clusterMeta.Size()-1)
-		for id := int32(0); id < e.clusterMeta.Size(); id++ {
-			if id != e.clusterMeta.NodeIDSelf() {
-				e.requestVoteAsync(id, votes)
-			}
+	for id := int32(0); id < e.clusterMeta.Size(); id++ {
+		if id != e.clusterMeta.NodeIDSelf() {
+			go e.requestVote(id, votes)
 		}
+	}
 
-		numGrant := int32(1) // start at 1 since candidate votes for self before requesting votes to others
-		for id := int32(0); id < e.clusterMeta.Size(); id++ {
-			if id != e.clusterMeta.NodeIDSelf() && <-votes {
-				numGrant++
-				if e.isMajority(numGrant) {
-					majority <- struct{}{}
-					return
-				}
-			}
+	numGrant := int32(1) // start at 1 since candidate votes for self before requesting votes to others
+	for id := int32(0); id < e.clusterMeta.Size(); id++ {
+		if id != e.clusterMeta.NodeIDSelf() && <-votes {
+			numGrant++
 		}
-	}()
+	}
+
+	if e.isMajority(numGrant) {
+		majority <- struct{}{}
+	}
 }
 
-func (e *Engine) requestVoteAsync(targetID int32, votes chan bool) {
-	go func() {
-		// e.lock.Lock()
-		lastLog := e.logs[len(e.logs)-1]
-		req := &pb.RequestVoteReq{
-			Term:         e.currentTerm,
-			CandidateID:  e.clusterMeta.NodeIDSelf(),
-			LastLogIndex: lastLog.entry.GetIndex(),
-			LastLogTerm:  lastLog.entry.GetTerm(),
-		}
-		// e.lock.Unlock()
+func (e *Engine) requestVote(targetID int32, votes chan bool) {
+	// e.lock.Lock()
+	lastLog := e.logs[len(e.logs)-1]
+	req := &pb.RequestVoteReq{
+		Term:         e.currentTerm,
+		CandidateID:  e.clusterMeta.NodeIDSelf(),
+		LastLogIndex: lastLog.entry.GetIndex(),
+		LastLogTerm:  lastLog.entry.GetTerm(),
+	}
+	// e.lock.Unlock()
 
-		resp, err := e.clusterMeta.RaftClient(targetID).RequestVote(context.Background(), req)
-		if err != nil {
-			e.logger.Error("RequestVote RPC failed | targetID=%v | req=%v | states=%v | err=[%v]",
-				targetID, req, e, err)
-			votes <- false
-			return
-		}
-		e.logger.Info("RequestVote RPC sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
+	resp, err := e.requestVoteRPC(targetID, req)
+	if err != nil {
+		e.logger.Error("RequestVote failed | targetID=%v | req=%v | states=%v | err=[%v]",
+			targetID, req, e, err)
+		votes <- false
+		return
+	}
 
-		// e.lock.Lock()
-		if resp.GetTerm() > e.currentTerm {
-			if err := e.convertToFollower(resp.GetTerm()); err != nil {
-				e.logger.Error("Convert to follower failed | err=[%v]", err)
-			}
+	// e.lock.Lock()
+	if resp.GetTerm() > e.currentTerm {
+		if err := e.convertToFollower(resp.GetTerm()); err != nil {
+			e.logger.Error("Convert to follower failed | err=[%v]", err)
 		}
-		// e.lock.Unlock()
+	}
+	// e.lock.Unlock()
 
-		votes <- resp.VoteGranted
-	}()
+	votes <- resp.VoteGranted
+}
+
+func (e *Engine) requestVoteRPC(targetID int32, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(rpcTimeout)*time.Millisecond)
+	defer cancel()
+	resp, err := e.clusterMeta.RaftClient(targetID).RequestVote(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	e.logger.Info("RequestVote | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
+	return resp, nil
 }
 
 // Persist replicates a raft log and applies it to state machine if succeeds.
@@ -619,23 +632,17 @@ func (e *Engine) Persist(log *Log) error {
 	return nil
 }
 
-func (e *Engine) persistNoOpAsync() {
-	go func() {
-		for {
-			if err := e.Persist(newNoOpLog()); err != nil {
-				e.logger.Error("Persist no-op log failed (retry after %v seconds) | states=%v | err=[%v]",
-					noOpRetryInterval, e, err)
-				time.Sleep(time.Duration(noOpRetryInterval) * time.Second)
-			} else {
-				e.logger.Info("No-op log entry persisted | states=%v", e)
-				break
-			}
-		}
-	}()
+func (e *Engine) persistNoOp() {
+	if err := e.Persist(newNoOpLog()); err != nil {
+		e.logger.Error("Persist no-op log failed | states=%v | err=[%v]", e, err)
+	} else {
+		e.logger.Info("No-op log persisted | states=%v", e)
+	}
 }
 
 func (e *Engine) leader() {
-	e.persistNoOpAsync()
+	e.initLeaderStates()
+	go e.persistNoOp()
 
 	for e.IsLeader() {
 		task := (*persistTask)(nil)
@@ -655,13 +662,10 @@ func (e *Engine) leader() {
 		}
 		// e.lock.Unlock()
 
-		if err := e.appendEntries(); err != nil {
-			if task != nil {
-				task.err = err
-				task.done <- false
-			}
-			e.logger.Error("AppendEntries failed | task=%v | err=[%v]", task, err)
-			continue
+		for !e.broadcastAppendEntries() {
+			e.logger.Error("AppendEntries failed to succeed on majority (retry after %v ms) | task=%v",
+				heartbeatInterval, task)
+			time.Sleep(time.Duration(heartbeatInterval))
 		}
 
 		// e.lock.Lock()
@@ -688,81 +692,88 @@ func (e *Engine) leader() {
 	e.logger.Info("Leader exited | states=%v", e)
 }
 
-func (e *Engine) appendEntries() error {
-	errs := make(chan error, e.clusterMeta.Size()-1)
+func (e *Engine) broadcastAppendEntries() bool {
+	suc := make(chan bool)
 
 	for id := int32(0); id < e.clusterMeta.Size(); id++ {
 		if id != e.clusterMeta.NodeIDSelf() {
-			e.appendEntriesAsync(id, errs)
+			go e.appendEntries(id, suc)
 		}
 	}
 
+	numSuc := int32(1) // start at 1 since logs already replicated on current node
 	for id := int32(0); id < e.clusterMeta.Size(); id++ {
-		if id != e.clusterMeta.NodeIDSelf() {
-			if err := <-errs; err != nil {
-				return err
-			}
+		if id != e.clusterMeta.NodeIDSelf() && <-suc {
+			numSuc++
 		}
 	}
 
-	return nil
+	return e.isMajority(numSuc)
 }
 
-func (e *Engine) appendEntriesAsync(targetID int32, errs chan error) {
-	go func() {
-		// e.lock.Lock()
+func (e *Engine) appendEntries(targetID int32, suc chan bool) {
+	// e.lock.Lock()
 
-		nextIndex := e.nextIndex[targetID]
-		prevLog := e.logs[nextIndex-1]
-		req := &pb.AppendEntriesReq{
-			Term:         e.currentTerm,
-			LeaderID:     e.clusterMeta.NodeIDSelf(),
-			PrevLogIndex: prevLog.entry.GetIndex(),
-			PrevLogTerm:  prevLog.entry.GetTerm(),
-			Entries:      make([]*pb.AppendEntriesReq_LogEntry, 0),
-			LeaderCommit: e.commitIndex,
+	nextIndex := e.nextIndex[targetID]
+	prevLog := e.logs[nextIndex-1]
+	req := &pb.AppendEntriesReq{
+		Term:         e.currentTerm,
+		LeaderID:     e.clusterMeta.NodeIDSelf(),
+		PrevLogIndex: prevLog.entry.GetIndex(),
+		PrevLogTerm:  prevLog.entry.GetTerm(),
+		Entries:      make([]*pb.AppendEntriesReq_LogEntry, 0),
+		LeaderCommit: e.commitIndex,
+	}
+
+	lastLogIndex := uint64(len(e.logs) - 1)
+	for i := nextIndex; i <= lastLogIndex; i++ {
+		req.Entries = append(req.Entries, e.logs[i].entry)
+	}
+
+	// e.lock.Unlock()
+
+	resp, err := e.appendEntriesRPC(targetID, req)
+	if err != nil {
+		e.logger.Error("AppendEntries failed | targetID=%v | req=%v | states=%v | err=[%v]",
+			targetID, req, e, err)
+		suc <- false
+		return
+	}
+
+	// e.lock.Lock()
+	// defer e.lock.Unlock()
+
+	if resp.GetTerm() > e.currentTerm {
+		if err := e.convertToFollower(resp.GetTerm()); err != nil {
+			e.logger.Error("Convert to follower failed | err=[%v]", err)
 		}
+		suc <- resp.GetSuccess()
+		return
+	}
 
-		lastLogIndex := uint64(len(e.logs) - 1)
-		for i := nextIndex; i <= lastLogIndex; i++ {
-			req.Entries = append(req.Entries, e.logs[i].entry)
+	if len(req.Entries) > 0 {
+		if resp.GetSuccess() {
+			newNextIndex := nextIndex + uint64(len(req.Entries))
+			e.nextIndex[targetID] = newNextIndex
+			e.matchIndex[targetID] = newNextIndex - 1
+			e.commit(nextIndex, newNextIndex)
+		} else {
+			e.nextIndex[targetID] = max(1, e.nextIndex[targetID]-1)
 		}
+	}
 
-		// e.lock.Unlock()
+	suc <- resp.GetSuccess()
+}
 
-		resp, err := e.clusterMeta.RaftClient(targetID).AppendEntries(context.Background(), req)
-		if err != nil {
-			errs <- fmt.Errorf("AppendEntries RPC failed | targetID=%v | req=%v | states=%v | err=[%v]",
-				targetID, req, e, err)
-			return
-		}
-		e.logger.Debug("AppendEntries RPC sent | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
-
-		// e.lock.Lock()
-		// defer e.lock.Unlock()
-
-		if resp.GetTerm() > e.currentTerm {
-			if err := e.convertToFollower(resp.GetTerm()); err != nil {
-				errs <- fmt.Errorf("Convert to follower failed | err=[%w]", err)
-			} else {
-				errs <- nil
-			}
-			return
-		}
-
-		if len(req.Entries) > 0 {
-			if resp.GetSuccess() {
-				newNextIndex := nextIndex + uint64(len(req.Entries))
-				e.nextIndex[targetID] = newNextIndex
-				e.matchIndex[targetID] = newNextIndex - 1
-				e.commit(nextIndex, newNextIndex)
-			} else {
-				e.nextIndex[targetID] = max(1, e.nextIndex[targetID]-1)
-			}
-		}
-
-		errs <- nil
-	}()
+func (e *Engine) appendEntriesRPC(targetID int32, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(rpcTimeout)*time.Millisecond)
+	defer cancel()
+	resp, err := e.clusterMeta.RaftClient(targetID).AppendEntries(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	e.logger.Info("AppendEntries | targetID=%v | req=%v | resp=%v | states=%v", targetID, req, resp, e)
+	return resp, nil
 }
 
 func (e *Engine) commit(begIndex uint64, endIndex uint64) {

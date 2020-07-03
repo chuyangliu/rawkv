@@ -7,6 +7,9 @@ import (
 // ErrNotReady indicates the server is still initializing and not ready to server requests.
 var ErrNotReady error = errors.New("Serve not ready")
 
+// ErrCanceled indicates the request has been canceled by the client.
+var ErrCanceled error = errors.New("Request canceled by client")
+
 // ErrInternal indicates there is something wrong during server's internal processing.
 var ErrInternal error = errors.New("Internal server error (please see server's logs for more details)")
 

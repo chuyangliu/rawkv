@@ -25,6 +25,9 @@ const (
 	envRaftPort    = "RAWKV_RAFT_PORT"
 )
 
+// Assert *KubeMeta implements Meta.
+var _ Meta = (*KubeMeta)(nil)
+
 // KubeMeta implements Meta interface for a kubernetes cluster.
 // An example of cluster config can be found at kubernetes/rawkv.yaml.
 type KubeMeta struct {

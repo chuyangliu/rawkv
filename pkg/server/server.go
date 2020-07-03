@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 
 	"google.golang.org/grpc"
 
@@ -16,13 +17,21 @@ import (
 	"github.com/chuyangliu/rawkv/pkg/store/shardmgr"
 )
 
+// Assert *Server implements pb.StorageServer.
+var _ pb.StorageServer = (*Server)(nil)
+
+// Assert *Server implements pb.RaftServer.
+var _ pb.RaftServer = (*Server)(nil)
+
 // Server manages the server running on node.
 type Server struct {
 	logger      *logging.Logger
 	rootdir     string
 	flushThresh store.KVLen
 	blockSize   store.KVLen
-	initDone    bool
+
+	initDone     bool
+	initDoneLock sync.Mutex
 
 	clusterMeta cluster.Meta
 	raftEngine  *raft.Engine
@@ -70,7 +79,7 @@ func (s *Server) Serve(storageAddr string, raftAddr string) error {
 	s.shardMgr = shardmgr.New(s.logger.Level(), s.rootdir, s.flushThresh, s.blockSize, s.raftEngine)
 
 	// signal init complete
-	s.initDone = true
+	s.setInitDone()
 
 	// start raft engine
 	s.raftEngine.Run()
@@ -106,6 +115,18 @@ func (s *Server) serveRaft(addr string) {
 	}
 }
 
+func (s *Server) setInitDone() {
+	s.initDoneLock.Lock()
+	defer s.initDoneLock.Unlock()
+	s.initDone = true
+}
+
+func (s *Server) isInitDone() bool {
+	s.initDoneLock.Lock()
+	defer s.initDoneLock.Unlock()
+	return s.initDone
+}
+
 // -------------------------------
 // pb.StorageServer Implementation
 // -------------------------------
@@ -114,8 +135,12 @@ func (s *Server) serveRaft(addr string) {
 func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 	s.logger.Debug("Get | key=%v", store.Key(req.GetKey()))
 
-	if !s.initDone {
+	if !s.isInitDone() {
 		return nil, ErrNotReady
+	}
+
+	if ctx.Err() == context.Canceled {
+		return nil, ErrCanceled
 	}
 
 	val, found, err := s.shardMgr.Get(req.GetKey())
@@ -134,8 +159,12 @@ func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 	s.logger.Debug("Put | key=%v | val=%v", store.Key(req.GetKey()), store.Value(req.GetVal()))
 
-	if !s.initDone {
+	if !s.isInitDone() {
 		return nil, ErrNotReady
+	}
+
+	if ctx.Err() == context.Canceled {
+		return nil, ErrCanceled
 	}
 
 	if !s.raftEngine.IsLeader() {
@@ -160,8 +189,12 @@ func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	s.logger.Debug("Del | key=%v", store.Key(req.GetKey()))
 
-	if !s.initDone {
+	if !s.isInitDone() {
 		return nil, ErrNotReady
+	}
+
+	if ctx.Err() == context.Canceled {
+		return nil, ErrCanceled
 	}
 
 	if !s.raftEngine.IsLeader() {
@@ -200,16 +233,28 @@ func (s *Server) redirectDel(id int32, req *pb.DelReq) (*pb.DelResp, error) {
 
 // RequestVote invoked by candidates to gather votes.
 func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
-	if !s.initDone {
+
+	if !s.isInitDone() {
 		return nil, ErrNotReady
 	}
+
+	if ctx.Err() == context.Canceled {
+		return nil, ErrCanceled
+	}
+
 	return s.raftEngine.RequestVoteHandler(req), nil
 }
 
 // AppendEntries invoked by leader to replicate log entries, also used as heartbeat.
 func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
-	if !s.initDone {
+
+	if !s.isInitDone() {
 		return nil, ErrNotReady
 	}
+
+	if ctx.Err() == context.Canceled {
+		return nil, ErrCanceled
+	}
+
 	return s.raftEngine.AppendEntriesHandler(req), nil
 }
