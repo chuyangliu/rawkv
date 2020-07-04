@@ -1,3 +1,4 @@
+// Package main implements a command-line tool to start a rawkv server.
 package main
 
 import (

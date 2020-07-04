@@ -1,3 +1,4 @@
+// Package main implements a client library to communicate with rawkv backend.
 package main
 
 import (

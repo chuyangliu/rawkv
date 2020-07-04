@@ -1,6 +1,6 @@
 # RawKV
 
-[![][travis-badge]][travis] [![][goreport-badge]][goreport]
+[![][travis-badge]][travis] [![][goreport-badge]][goreport] [![][godoc-badge]][godoc]
 
 RawKV is a cloud-native distributed key-value database aiming to run on Kubernetes clusters, with focuses on:
 
@@ -73,3 +73,6 @@ See the [LICENSE](./LICENSE.md) file for license rights and limitations.
 
 [goreport]: https://goreportcard.com/report/github.com/chuyangliu/rawkv
 [goreport-badge]: https://goreportcard.com/badge/github.com/chuyangliu/rawkv
+
+[godoc]: https://pkg.go.dev/mod/github.com/chuyangliu/rawkv@v0.1.0?tab=overview
+[godoc-badge]: https://img.shields.io/badge/godoc-reference-blue
