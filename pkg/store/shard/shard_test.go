@@ -56,9 +56,9 @@ func TestBasic(t *testing.T) {
 	// get
 	for _, v := range data {
 		entryExpect := store.Entry{
-			Key:  store.Key(v),
-			Val:  store.Value(v),
-			Stat: store.KStatPut,
+			Key:    store.Key(v),
+			Value:  store.Value(v),
+			Status: store.StatusPut,
 		}
 		entry, err := s.Get(entryExpect.Key)
 		if !assert.NoError(t, err) || !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
@@ -76,9 +76,9 @@ func TestBasic(t *testing.T) {
 	// get
 	for _, v := range data {
 		entryExpect := store.Entry{
-			Key:  store.Key(v),
-			Val:  "",
-			Stat: store.KStatDel,
+			Key:    store.Key(v),
+			Value:  "",
+			Status: store.StatusDel,
 		}
 		entry, err := s.Get(entryExpect.Key)
 		if !assert.NoError(t, err) || !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
@@ -175,7 +175,7 @@ func checkDataExist(s *Shard, data []string, results chan checkExistResult) {
 		entry, err := s.Get(store.Key(v))
 		results <- checkExistResult{
 			key:   store.Key(v),
-			exist: err == nil && entry != nil && entry.Val == store.Value(v) && entry.Stat == store.KStatPut,
+			exist: err == nil && entry != nil && entry.Value == store.Value(v) && entry.Status == store.StatusPut,
 			err:   err,
 		}
 	}

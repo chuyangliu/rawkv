@@ -20,10 +20,10 @@ type checkExistResult struct {
 
 func TestBasic(t *testing.T) {
 	max := 1000
-	sizeMeta := (store.KVLenSize*2 + store.KStatSize) * store.KVLen(max)
+	sizeMeta := (store.KVLenSize*2 + store.StatusSize) * store.KVLen(max)
 	sizeKV := store.KVLen(0)
 
-	// create data
+	// Create data.
 	data := make([]string, max)
 	for i := 0; i < max; i++ {
 		data[i] = strconv.Itoa(i)
@@ -33,22 +33,22 @@ func TestBasic(t *testing.T) {
 
 	s := New(logging.LevelDebug)
 
-	// put
+	// Put.
 	for _, v := range data {
 		s.Put(store.Key(v), store.Value(v))
 	}
 
-	// size
+	// Size.
 	if !assert.Equal(t, sizeMeta+sizeKV*2, s.Size()) {
 		panic(nil)
 	}
 
-	// get
+	// Get.
 	for _, v := range data {
 		entryExpect := store.Entry{
-			Key:  store.Key(v),
-			Val:  store.Value(v),
-			Stat: store.KStatPut,
+			Key:    store.Key(v),
+			Value:  store.Value(v),
+			Status: store.StatusPut,
 		}
 		entry := s.Get(entryExpect.Key)
 		if !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
@@ -56,35 +56,35 @@ func TestBasic(t *testing.T) {
 		}
 	}
 
-	// get all
+	// Get all.
 	for i, entry := range s.Entries() {
 		entryExpect := store.Entry{
-			Key:  store.Key(data[i]),
-			Val:  store.Value(data[i]),
-			Stat: store.KStatPut,
+			Key:    store.Key(data[i]),
+			Value:  store.Value(data[i]),
+			Status: store.StatusPut,
 		}
 		if !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
 		}
 	}
 
-	// del
+	// Del.
 	for _, v := range data {
 		s.Del(store.Key(v))
 
 	}
 
-	// size
+	// Size.
 	if !assert.Equal(t, sizeMeta+sizeKV, s.Size()) {
 		panic(nil)
 	}
 
-	// get
+	// Get.
 	for _, v := range data {
 		entryExpect := store.Entry{
-			Key:  store.Key(v),
-			Val:  "",
-			Stat: store.KStatDel,
+			Key:    store.Key(v),
+			Value:  "",
+			Status: store.StatusDel,
 		}
 		entry := s.Get(entryExpect.Key)
 		if !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
@@ -92,12 +92,12 @@ func TestBasic(t *testing.T) {
 		}
 	}
 
-	// get all
+	// Get all.
 	for i, entry := range s.Entries() {
 		entryExpect := store.Entry{
-			Key:  store.Key(data[i]),
-			Val:  "",
-			Stat: store.KStatDel,
+			Key:    store.Key(data[i]),
+			Value:  "",
+			Status: store.StatusDel,
 		}
 		if !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
@@ -109,10 +109,10 @@ func TestConcurrency(t *testing.T) {
 	max := 1000
 	step := 100
 	numWorkers := max / step
-	sizeMeta := (store.KVLenSize*2 + store.KStatSize) * store.KVLen(max)
+	sizeMeta := (store.KVLenSize*2 + store.StatusSize) * store.KVLen(max)
 	sizeKV := store.KVLen(0)
 
-	// create data
+	// Create data.
 	data := make([]string, max)
 	for i := 0; i < max; i++ {
 		data[i] = strconv.Itoa(i)
@@ -122,7 +122,7 @@ func TestConcurrency(t *testing.T) {
 
 	s := New(logging.LevelDebug)
 
-	// put
+	// Put.
 	finishes := make(chan bool, numWorkers)
 	for i := 0; i < max; i += step {
 		go putData(s, data[i:i+step], finishes)
@@ -131,12 +131,12 @@ func TestConcurrency(t *testing.T) {
 		<-finishes
 	}
 
-	// size
+	// Size.
 	if !assert.Equal(t, sizeMeta+sizeKV*2, s.Size()) {
 		panic(nil)
 	}
 
-	// get
+	// Get.
 	results := make(chan checkExistResult, max)
 	for i := 0; i < max; i += step {
 		go checkDataExist(s, data[i:i+step], results)
@@ -147,19 +147,19 @@ func TestConcurrency(t *testing.T) {
 		}
 	}
 
-	// get all
+	// Get all.
 	for i, entry := range s.Entries() {
 		entryExpect := store.Entry{
-			Key:  store.Key(data[i]),
-			Val:  store.Value(data[i]),
-			Stat: store.KStatPut,
+			Key:    store.Key(data[i]),
+			Value:  store.Value(data[i]),
+			Status: store.StatusPut,
 		}
 		if !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
 		}
 	}
 
-	// del
+	// Del.
 	for i := 0; i < max; i += step {
 		go delData(s, data[i:i+step], finishes)
 	}
@@ -167,12 +167,12 @@ func TestConcurrency(t *testing.T) {
 		<-finishes
 	}
 
-	// size
+	// Size.
 	if !assert.Equal(t, sizeMeta+sizeKV, s.Size()) {
 		panic(nil)
 	}
 
-	// get
+	// Get.
 	for i := 0; i < max; i += step {
 		go checkDataExist(s, data[i:i+step], results)
 	}
@@ -182,12 +182,12 @@ func TestConcurrency(t *testing.T) {
 		}
 	}
 
-	// get all
+	// Get all.
 	for i, entry := range s.Entries() {
 		entryExpect := store.Entry{
-			Key:  store.Key(data[i]),
-			Val:  "",
-			Stat: store.KStatDel,
+			Key:    store.Key(data[i]),
+			Value:  "",
+			Status: store.StatusDel,
 		}
 		if !assert.Equal(t, entryExpect, *entry) {
 			panic(nil)
@@ -215,7 +215,7 @@ func checkDataExist(s *Store, data []string, results chan checkExistResult) {
 	sleepRand()
 	for _, v := range data {
 		entry := s.Get(store.Key(v))
-		if entry == nil || entry.Val != store.Value(v) || entry.Stat != store.KStatPut {
+		if entry == nil || entry.Value != store.Value(v) || entry.Status != store.StatusPut {
 			results <- checkExistResult{key: store.Key(v), exist: false}
 		} else {
 			results <- checkExistResult{key: store.Key(v), exist: true}

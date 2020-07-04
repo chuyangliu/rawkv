@@ -31,29 +31,29 @@ func TestBasic(t *testing.T) {
 	flushThresh := store.KVLen(1024 * 10)
 	blockSize := store.KVLen(1024 * 2)
 
-	// create root directory
+	// Create root directory.
 	if err := os.MkdirAll(rootdir, 0777); !assert.NoError(t, err) {
 		panic(nil)
 	}
 
-	// create data
+	// Create data.
 	data := make([]string, max)
 	for i := 0; i < max; i++ {
 		data[i] = strconv.Itoa(i)
 	}
 	sort.Strings(data)
 
-	// create Manager
+	// Create Manager.
 	m := New(logging.LevelDebug, rootdir, flushThresh, blockSize, nil)
 
-	// put
+	// Put.
 	for _, v := range data {
 		if err := m.Put([]byte(v), []byte(v)); !assert.NoError(t, err) {
 			panic(nil)
 		}
 	}
 
-	// get
+	// Get.
 	for _, v := range data {
 		val, found, err := m.Get([]byte(v))
 		if !assert.NoError(t, err) || !assert.True(t, found) || !assert.Equal(t, store.Value(v), val) {
@@ -61,14 +61,14 @@ func TestBasic(t *testing.T) {
 		}
 	}
 
-	// del
+	// Del.
 	for _, v := range data {
 		if err := m.Del([]byte(v)); !assert.NoError(t, err) {
 			panic(nil)
 		}
 	}
 
-	// get
+	// Get.
 	for _, v := range data {
 		_, found, err := m.Get([]byte(v))
 		if !assert.NoError(t, err) || !assert.False(t, found) {
@@ -84,22 +84,22 @@ func TestConcurrency(t *testing.T) {
 	flushThresh := store.KVLen(1024 * 10)
 	blockSize := store.KVLen(1024 * 2)
 
-	// create root directory
+	// Create root directory.
 	if err := os.MkdirAll(rootdir, 0777); !assert.NoError(t, err) {
 		panic(nil)
 	}
 
-	// create data
+	// Create data.
 	data := make([]string, max)
 	for i := 0; i < max; i++ {
 		data[i] = strconv.Itoa(i)
 	}
 	sort.Strings(data)
 
-	// create Manager
+	// Create Manager.
 	m := New(logging.LevelDebug, rootdir, flushThresh, blockSize, nil)
 
-	// put
+	// Put.
 	putResults := make(chan putDelResult, max)
 	for i := 0; i < max; i += step {
 		go putData(m, data[i:i+step], putResults)
@@ -110,7 +110,7 @@ func TestConcurrency(t *testing.T) {
 		}
 	}
 
-	// get
+	// Get.
 	getResults := make(chan checkExistResult, max)
 	for i := 0; i < max; i += step {
 		go checkDataExist(m, data[i:i+step], getResults)
@@ -121,7 +121,7 @@ func TestConcurrency(t *testing.T) {
 		}
 	}
 
-	// del
+	// Del.
 	delResults := make(chan putDelResult, max)
 	for i := 0; i < max; i += step {
 		go delData(m, data[i:i+step], delResults)
@@ -132,7 +132,7 @@ func TestConcurrency(t *testing.T) {
 		}
 	}
 
-	// get
+	// Get.
 	for i := 0; i < max; i += step {
 		go checkDataExist(m, data[i:i+step], getResults)
 	}

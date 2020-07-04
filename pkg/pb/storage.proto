@@ -3,11 +3,11 @@ syntax = "proto3";
 option go_package = "github.com/chuyangliu/rawkv/pkg/pb";
 
 service Storage {
-    // Get returns the value associated with the key, and a boolean indicating whether the key exists.
+    // Get returns the value associated with given key.
     rpc Get(GetReq) returns (GetResp) {}
-    // Put adds or updates a key-value pair to the storage.
+    // Put adds or updates a key-value pair.
     rpc Put(PutReq) returns (PutResp) {}
-    // Del removes key from the storage.
+    // Del removes a key-value pair.
     rpc Del(DelReq) returns (DelResp) {}
 }
 
@@ -16,13 +16,13 @@ message GetReq {
 }
 
 message GetResp {
-    bytes val = 1;
+    bytes value = 1;
     bool found = 2;
 }
 
 message PutReq {
     bytes key = 1;
-    bytes val = 2;
+    bytes value = 2;
 }
 
 message PutResp {

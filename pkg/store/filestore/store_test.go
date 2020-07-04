@@ -25,31 +25,31 @@ func TestBasic(t *testing.T) {
 	blockSize := store.KVLen(4096)
 	path := "./filestore.test"
 
-	// create data
+	// Create data.
 	data := make([]string, max)
 	for i := 0; i < max; i++ {
 		data[i] = strconv.Itoa(i)
 	}
 	sort.Strings(data)
 
-	// create MemStore
+	// Create MemStore.
 	ms := memstore.New(logging.LevelDebug)
 	for _, v := range data {
 		ms.Put(store.Key(v), store.Value(v))
 	}
 
-	// create FileStore from MemStore
+	// Create FileStore from MemStore.
 	fs, err := New(logging.LevelDebug, path, ms)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
 
-	// get
+	// Get.
 	for _, v := range data {
 		entryExpect := store.Entry{
-			Key:  store.Key(v),
-			Val:  store.Value(v),
-			Stat: store.KStatPut,
+			Key:    store.Key(v),
+			Value:  store.Value(v),
+			Status: store.StatusPut,
 		}
 		entry, err := fs.Get(entryExpect.Key)
 		if !assert.NoError(t, err) || !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
@@ -57,17 +57,17 @@ func TestBasic(t *testing.T) {
 		}
 	}
 
-	// flush
+	// Flush.
 	if err := fs.Flush(blockSize); !assert.NoError(t, err) {
 		panic(nil)
 	}
 
-	// get
+	// Get.
 	for _, v := range data {
 		entryExpect := store.Entry{
-			Key:  store.Key(v),
-			Val:  store.Value(v),
-			Stat: store.KStatPut,
+			Key:    store.Key(v),
+			Value:  store.Value(v),
+			Status: store.StatusPut,
 		}
 		entry, err := fs.Get(entryExpect.Key)
 		if !assert.NoError(t, err) || !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
@@ -75,18 +75,18 @@ func TestBasic(t *testing.T) {
 		}
 	}
 
-	// create FileStore from disk
+	// Create FileStore from disk.
 	fs, err = New(logging.LevelDebug, path, nil)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
 
-	// get
+	// Get.
 	for _, v := range data {
 		entryExpect := store.Entry{
-			Key:  store.Key(v),
-			Val:  store.Value(v),
-			Stat: store.KStatPut,
+			Key:    store.Key(v),
+			Value:  store.Value(v),
+			Status: store.StatusPut,
 		}
 		entry, err := fs.Get(entryExpect.Key)
 		if !assert.NoError(t, err) || !assert.NotNil(t, entry) || !assert.Equal(t, entryExpect, *entry) {
@@ -101,56 +101,56 @@ func TestConcurrency(t *testing.T) {
 	blockSize := store.KVLen(4096)
 	path := "./filestore.test"
 
-	// create data
+	// Create data.
 	data := make([]string, max)
 	for i := 0; i < max; i++ {
 		data[i] = strconv.Itoa(i)
 	}
 	sort.Strings(data)
 
-	// create MemStore
+	// Create MemStore.
 	ms := memstore.New(logging.LevelDebug)
 	for _, v := range data {
 		ms.Put(store.Key(v), store.Value(v))
 	}
 
-	// create FileStore from MemStore
+	// Create FileStore from MemStore.
 	fs, err := New(logging.LevelDebug, path, ms)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
 
-	// get in background
+	// Get in background.
 	results := make(chan checkExistResult, max)
 	for i := 0; i < max; i += step {
 		go checkDataExist(fs, data[i:i+step], results)
 	}
 
-	// flush
+	// Flush.
 	sleepRand()
 	if err := fs.Flush(blockSize); !assert.NoError(t, err) {
 		panic(nil)
 	}
 
-	// check existence
+	// Check existence.
 	for i := 0; i < max; i++ {
 		if result := <-results; !assert.True(t, result.exist) {
 			panic(fmt.Sprintf("key %v doesn't exist", result.key))
 		}
 	}
 
-	// create FileStore from disk
+	// Create FileStore from disk.
 	fs, err = New(logging.LevelDebug, path, nil)
 	if !assert.NoError(t, err) {
 		panic(nil)
 	}
 
-	// get in background
+	// Get in background.
 	for i := 0; i < max; i += step {
 		go checkDataExist(fs, data[i:i+step], results)
 	}
 
-	// check existence
+	// Check existence.
 	for i := 0; i < max; i++ {
 		if result := <-results; !assert.True(t, result.exist) {
 			panic(fmt.Sprintf("key %v doesn't exist", result.key))
@@ -162,9 +162,9 @@ func checkDataExist(fs *Store, data []string, results chan checkExistResult) {
 	sleepRand()
 	for _, v := range data {
 		entryExpect := store.Entry{
-			Key:  store.Key(v),
-			Val:  store.Value(v),
-			Stat: store.KStatPut,
+			Key:    store.Key(v),
+			Value:  store.Value(v),
+			Status: store.StatusPut,
 		}
 		entry, err := fs.Get(entryExpect.Key)
 		if err != nil || !reflect.DeepEqual(entryExpect, *entry) {

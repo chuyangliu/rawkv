@@ -16,7 +16,7 @@ import (
 	"github.com/chuyangliu/rawkv/pkg/pb"
 )
 
-// Environment variables.
+// Environment variable to initialize a KubeMeta.
 const (
 	envPodName     = "RAWKV_POD_NAME"
 	envServiceName = "RAWKV_SERVICE_NAME"
@@ -32,17 +32,17 @@ var _ Meta = (*KubeMeta)(nil)
 // An example of cluster config can be found at kubernetes/rawkv.yaml.
 type KubeMeta struct {
 	logger         *logging.Logger
-	id             int32              // current node id
-	size           int32              // number of nodes in the cluster
-	storageClients []pb.StorageClient // storage grpc clients to communicate with other nodes (indexed by node id)
-	raftClients    []pb.RaftClient    // raft grpc clients to communicate with other nodes (indexed by node id)
+	id             int32              // Current node id.
+	size           int32              // Number of nodes in the cluster.
+	storageClients []pb.StorageClient // Storage grpc clients to communicate with other nodes (indexed by node id).
+	raftClients    []pb.RaftClient    // Raft grpc clients to communicate with other nodes (indexed by node id).
 }
 
-// NewKubeMeta instantiates a new KubeMeta.
-func NewKubeMeta(logLevel int) (*KubeMeta, error) {
+// NewKubeMeta creates a KubeMeta with given logging level.
+func NewKubeMeta(level int) (*KubeMeta, error) {
 
 	km := &KubeMeta{
-		logger: logging.New(logLevel),
+		logger: logging.New(level),
 	}
 
 	if err := km.init(); err != nil {
@@ -53,20 +53,22 @@ func NewKubeMeta(logLevel int) (*KubeMeta, error) {
 	return km, nil
 }
 
+// String returns a string representation of the KubeMeta.
 func (km *KubeMeta) String() string {
 	return fmt.Sprintf("[id=%v | size=%v]", km.id, km.size)
 }
 
+// init initializes the KubeMeta.
 func (km *KubeMeta) init() error {
 
-	// get pod name
+	// Get pod name.
 	podName := os.Getenv(envPodName)
 	if len(podName) == 0 {
 		return fmt.Errorf("Get pod name failed | env=%v | val=%v", envPodName, podName)
 	}
 	km.logger.Info("Read pod name env | val=%v", podName)
 
-	// get current node id
+	// Get current node id.
 	pos := strings.LastIndex(podName, "-")
 	if pos < 0 || pos == len(podName) {
 		return fmt.Errorf("Invalid pod name | podName=%v", podName)
@@ -77,50 +79,50 @@ func (km *KubeMeta) init() error {
 	}
 	km.id = int32(id)
 
-	// get service name
+	// Get service name.
 	serviceName := os.Getenv(envServiceName)
 	if len(serviceName) == 0 {
 		return fmt.Errorf("Get service name failed | env=%v | val=%v", envServiceName, serviceName)
 	}
 	km.logger.Info("Read service name env | val=%v", serviceName)
 
-	// get namespace
+	// Get namespace.
 	namespace := os.Getenv(envNamespace)
 	if len(namespace) == 0 {
 		return fmt.Errorf("Get namespace failed | env=%v | val=%v", envNamespace, namespace)
 	}
 	km.logger.Info("Read namespace env | val=%v", namespace)
 
-	// init cluster size
+	// Init cluster size.
 	if err := km.initSize(namespace); err != nil {
 		return fmt.Errorf("Initialize cluster size failed | err=[%w]", err)
 	}
 
-	// create address format
-	// reference: https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#stable-network-id
+	// Create network address format.
+	// Reference: https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#stable-network-id
 	addrFmt := fmt.Sprintf("%s.%s.%s.%s.%s:%s",
 		podName[:pos+1]+"%v", serviceName, namespace, "svc", "cluster.local", "%v")
 
-	// get port number of storage grpc server
+	// Get port number of storage grpc server.
 	storagePort := os.Getenv(envStoragePort)
 	if len(storagePort) == 0 {
 		return fmt.Errorf("Get storage port failed | env=%v | val=%v", envStoragePort, storagePort)
 	}
 	km.logger.Info("Read storage port env | val=%v", storagePort)
 
-	// get port number of raft grpc server
+	// Get port number of raft grpc server.
 	raftPort := os.Getenv(envRaftPort)
 	if len(raftPort) == 0 {
 		return fmt.Errorf("Get raft port failed | env=%v | val=%v", envRaftPort, raftPort)
 	}
 	km.logger.Info("Read raft port env | val=%v", raftPort)
 
-	// establish grpc connections with other storage servers in the cluster
+	// Establish grpc connections with other storage servers in the cluster.
 	if err := km.initStorageClients(addrFmt, storagePort); err != nil {
 		return fmt.Errorf("Create storage grpc clients failed | err=[%w]", err)
 	}
 
-	// establish grpc connections with other raft servers in the cluster
+	// Establish grpc connections with other raft servers in the cluster.
 	if err := km.initRaftClients(addrFmt, raftPort); err != nil {
 		return fmt.Errorf("Create raft grpc clients failed | err=[%w]", err)
 	}
@@ -128,6 +130,8 @@ func (km *KubeMeta) init() error {
 	return nil
 }
 
+// initSize initializes the cluster size field of KubeMeta.
+// The method waits until there are at least three nodes in the cluster before returning.
 func (km *KubeMeta) initSize(namespace string) error {
 	for {
 		config, err := rest.InClusterConfig()
@@ -157,6 +161,7 @@ func (km *KubeMeta) initSize(namespace string) error {
 	return nil
 }
 
+// initStorageClients initializes storage grpc clients to communicate with each other node.
 func (km *KubeMeta) initStorageClients(addrFmt string, storagePort string) error {
 	km.storageClients = make([]pb.StorageClient, km.size)
 	for id := int32(0); id < km.size; id++ {
@@ -172,6 +177,7 @@ func (km *KubeMeta) initStorageClients(addrFmt string, storagePort string) error
 	return nil
 }
 
+// initRaftClients initializes raft grpc clients to communicate with each other node.
 func (km *KubeMeta) initRaftClients(addrFmt string, raftPort string) error {
 	km.raftClients = make([]pb.RaftClient, km.size)
 	for id := int32(0); id < km.size; id++ {

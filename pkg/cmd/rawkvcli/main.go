@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	retryInterval int64 = 5 // seconds
+	retryInterval int64 = 5 // Seconds.
 )
 
 func main() {
@@ -82,7 +82,7 @@ func execGet(addr string, key string) {
 			time.Sleep(time.Duration(retryInterval) * time.Second)
 		} else {
 			if resp.Found {
-				fmt.Printf("Found value: %v\n", string(resp.Val))
+				fmt.Printf("Found value: %v\n", string(resp.Value))
 			} else {
 				fmt.Printf("Key not found!\n")
 			}
@@ -101,7 +101,7 @@ func execPut(addr string, key string, val string) {
 	defer conn.Close()
 
 	client := pb.NewStorageClient(conn)
-	req := &pb.PutReq{Key: []byte(key), Val: []byte(val)}
+	req := &pb.PutReq{Key: []byte(key), Value: []byte(val)}
 
 	for i := 0; true; i++ {
 		fmt.Printf("Sending request #%v\n", i+1)

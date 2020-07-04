@@ -1,3 +1,4 @@
+// Package shardmgr provides methods to manage a group of shards.
 package shardmgr
 
 import (
@@ -9,7 +10,7 @@ import (
 	sd "github.com/chuyangliu/rawkv/pkg/store/shard"
 )
 
-// Manager manages a collection of Shards.
+// Manager manages a group of shards.
 // Currently only a single shard is managed as shard split hasn't been implemented.
 type Manager struct {
 	logger     *logging.Logger
@@ -17,13 +18,13 @@ type Manager struct {
 	raftEngine *raft.Engine
 }
 
-// New instantiates a new Manager.
-func New(logLevel int, rootdir string, flushThresh store.KVLen, blockSize store.KVLen,
-	raftEngine *raft.Engine) *Manager {
+// New creates a Manager with given logging level, root directory, flush threshold, block size, and raft engine.
+// If raftEngine is nil, perform operations locally (for testing).
+func New(level int, rootdir string, flushThresh store.KVLen, blockSize store.KVLen, raftEngine *raft.Engine) *Manager {
 
 	m := &Manager{
-		logger:     logging.New(logLevel),
-		shards:     []*sd.Shard{sd.New(logLevel, rootdir, flushThresh, blockSize)},
+		logger:     logging.New(level),
+		shards:     []*sd.Shard{sd.New(level, rootdir, flushThresh, blockSize)},
 		raftEngine: raftEngine,
 	}
 
@@ -34,26 +35,29 @@ func New(logLevel int, rootdir string, flushThresh store.KVLen, blockSize store.
 	return m
 }
 
-// Get returns the value associated with the key, and a boolean indicating whether the key exists.
+// Get returns the value associated with key, or empty string if key is not found.
+// The second return value is set to true if key is found, and false otherwise.
 func (m *Manager) Get(key []byte) (store.Value, bool, error) {
 	entry, err := m.shards[0].Get(store.Key(key))
 	if err != nil {
 		return "", false, fmt.Errorf("Get key from shard failed | err=[%w]", err)
-	} else if entry == nil || entry.Stat == store.KStatDel {
+	} else if entry == nil || entry.Status == store.StatusDel {
 		return "", false, nil
 	}
-	return entry.Val, true, nil
+	return entry.Value, true, nil
 }
 
-// Put adds or updates a key-value pair to the shards.
-func (m *Manager) Put(key []byte, val []byte) error {
+// Put adds a key-value pair to the shards.
+// If key exists, the associated value is updated to the new value.
+// Otherwise, a new key-value pair is added.
+func (m *Manager) Put(key []byte, value []byte) error {
 	var err error
 
 	if m.raftEngine == nil {
-		// no raft cluster, put key/val locally
-		err = m.shards[0].Put(store.Key(key), store.Value(val))
+		// No raft cluster, put key-value locally.
+		err = m.shards[0].Put(store.Key(key), store.Value(value))
 	} else {
-		err = m.raftEngine.Persist(raft.NewPutLog(key, val))
+		err = m.raftEngine.Persist(raft.NewPutLog(key, value))
 	}
 
 	if err != nil {
@@ -68,7 +72,7 @@ func (m *Manager) Del(key []byte) error {
 	var err error
 
 	if m.raftEngine == nil {
-		// no raft cluster, delete key locally
+		// No raft cluster, delete key locally.
 		err = m.shards[0].Del(store.Key(key))
 	} else {
 		err = m.raftEngine.Persist(raft.NewDelLog(key))
@@ -81,6 +85,7 @@ func (m *Manager) Del(key []byte) error {
 	return nil
 }
 
+// applyRaftLog applies given raft log to the shards.
 func (m *Manager) applyRaftLog(log *raft.Log) error {
 	switch log.Cmd() {
 	case raft.CmdNoOp:

@@ -1,3 +1,4 @@
+// Package raft implements raft consensus algorithm.
 package raft
 
 import (
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chuyangliu/rawkv/pkg/algods/algo"
 	"github.com/chuyangliu/rawkv/pkg/cluster"
 	"github.com/chuyangliu/rawkv/pkg/logging"
 	"github.com/chuyangliu/rawkv/pkg/pb"
@@ -25,11 +27,10 @@ const (
 	roleCandidate uint8 = 1
 	roleLeader    uint8 = 2
 
-	rpcTimeout int64 = 100 // milliseconds
-
-	electionTimeoutMin int64 = 1500 // milliseconds
-	electionTimeoutMax int64 = 3000 // milliseconds
-	heartbeatInterval  int64 = 500  // milliseconds
+	electionTimeoutMin int64 = 1500 // Milliseconds.
+	electionTimeoutMax int64 = 3000 // Milliseconds.
+	heartbeatInterval  int64 = 500  // Milliseconds.
+	rpcTimeout         int64 = 100  // Milliseconds.
 
 	persistQueueLen int = 1000
 )
@@ -37,65 +38,64 @@ const (
 // ApplyFunc applies a raft log to state machine.
 type ApplyFunc func(log *Log) error
 
-// Engine manages raft states and operations.
+// Engine implements raft consensus algorithm.
 type Engine struct {
 	logger *logging.Logger
 
-	// root directory to store raft states and logs
+	// Root directory to store raft states and logs.
 	raftdir string
 
-	// query cluster size, node ids, etc
+	// Query cluster size, node ids, etc.
 	clusterMeta cluster.Meta
 
-	// mutex lock to protect concurrent modifications to states
+	// Mutex lock to protect concurrent accesses.
 	lock sync.Mutex
 
-	// function provided by user to apply a given raft log to state machine
+	// Function supplied by user to apply a given raft log to state machine.
 	applyFunc ApplyFunc
 
-	// persistent state on all servers
+	// Persistent state on all servers.
 	currentTerm uint64
 	votedFor    int32
-	logs        []*Log // log index starts at 1
+	logs        []*Log // Log index starts at 1.
 
-	// volatile state on all servers
+	// Volatile state on all servers.
 	commitIndex uint64
 	lastApplied uint64
 
-	// volatile state on all leaders
+	// Volatile state on all leaders.
 	nextIndex  []uint64
 	matchIndex []uint64
 
-	// leader or follower or candidate
+	// Leader or follower or candidate.
 	role uint8
 
-	// leader node id
+	// Leader node id.
 	leaderID int32
 
-	// election timer
+	// Election timer.
 	electionTimer *raftTimer
 
-	// heartbeat timer to control empty AppendEntries sent during idle periods
+	// Heartbeat timer to control empty AppendEntries sent during idle periods.
 	heartbeatTimer *raftTimer
 
-	// channel to cancel follower's election timeout
+	// Channel to cancel follower's election timeout.
 	electionTimeoutCanceled chan struct{}
 
-	// queue to implement producer and consumer model for persist requests
+	// Queue to store tasks to persist raft logs.
 	queue *persistQueue
 }
 
-// NewEngine instantiates an Engine.
-func NewEngine(logLevel int, rootdir string, clusterMeta cluster.Meta) (*Engine, error) {
+// NewEngine creates an Engine with given logging level, root directory, and cluster meta.
+func NewEngine(level int, rootdir string, clusterMeta cluster.Meta) (*Engine, error) {
 
-	// create directory to store raft states
 	raftdir := path.Join(rootdir, dirRaft)
 	if err := os.MkdirAll(raftdir, 0777); err != nil {
 		return nil, fmt.Errorf("Create root directory failed | raftdir=%v | err=[%w]", raftdir, err)
 	}
 
 	engine := &Engine{
-		logger:      logging.New(logLevel),
+		logger:      logging.New(level),
 		raftdir:     raftdir,
 		clusterMeta: clusterMeta,
 	}
@@ -107,6 +107,7 @@ func NewEngine(logLevel int, rootdir string, clusterMeta cluster.Meta) (*Engine,
 	return engine, nil
 }
 
+// String returns a string representation of current raft states.
 func (e *Engine) String() string {
 	return fmt.Sprintf("[raftdir=%v | clusterMeta=%v | currentTerm=%v | votedFor=%v | logs=%v"+
 		" | commitIndex=%v | lastApplied=%v | nextIndex=%v | matchIndex=%v | role=%v | leaderID=%v]", e.raftdir,
@@ -114,49 +115,51 @@ func (e *Engine) String() string {
 		e.matchIndex, e.role, e.leaderID)
 }
 
+// init initializes raft states.
 func (e *Engine) init() error {
 
-	// init persistent state: currentTerm
+	// Init persistent state: currentTerm.
 	if err := e.initCurrentTerm(path.Join(e.raftdir, fileCurrentTerm)); err != nil {
 		return fmt.Errorf("Initialize currentTerm failed | err=[%w]", err)
 	}
 
-	// init persistent state: votedFor
+	// Init persistent state: votedFor.
 	if err := e.initVotedFor(path.Join(e.raftdir, fileVotedFor)); err != nil {
 		return fmt.Errorf("Initialize votedFor failed | err=[%w]", err)
 	}
 
-	// init persistent state: logs
+	// Init persistent state: logs.
 	if err := e.initLogs(path.Join(e.raftdir, fileLogs)); err != nil {
 		return fmt.Errorf("Initialize logs failed | err=[%w]", err)
 	}
 
-	// init volatile states on all servers
+	// Init volatile states on all servers.
 	e.commitIndex = 0
 	e.lastApplied = 0
 
-	// init volatile states on leaders
+	// Init volatile states on leaders.
 	e.nextIndex = make([]uint64, e.clusterMeta.Size())
 	e.matchIndex = make([]uint64, e.clusterMeta.Size())
 	e.initLeaderStates()
 
-	// init metadata
+	// Init metadata.
 	e.role = roleFollower
 	e.leaderID = e.clusterMeta.NodeIDNil()
 
-	// init timers and timeouts
-	e.electionTimer = newRaftTimerRand(e.logger.Level(), electionTimeoutMin, electionTimeoutMax)
-	e.heartbeatTimer = newRaftTimer(e.logger.Level(), heartbeatInterval)
+	// Init timers and timeouts.
+	e.electionTimer = newRaftTimerRand(electionTimeoutMin, electionTimeoutMax)
+	e.heartbeatTimer = newRaftTimer(heartbeatInterval)
 
-	// init channels
+	// Init channels.
 	e.electionTimeoutCanceled = make(chan struct{})
 
-	// init persist queue
+	// Init persist queue.
 	e.queue = newPersistQueue(persistQueueLen)
 
 	return nil
 }
 
+// initCurrentTerm initializes persistent state: currentTerm.
 func (e *Engine) initCurrentTerm(filePath string) error {
 
 	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0666)
@@ -180,6 +183,7 @@ func (e *Engine) initCurrentTerm(filePath string) error {
 	return nil
 }
 
+// initVotedFor initializes persistent states: votedFor.
 func (e *Engine) initVotedFor(filePath string) error {
 
 	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0666)
@@ -203,6 +207,7 @@ func (e *Engine) initVotedFor(filePath string) error {
 	return nil
 }
 
+// initLogs initializes persistent state: logs.
 func (e *Engine) initLogs(filePath string) error {
 
 	file, err := os.OpenFile(filePath, os.O_RDONLY|os.O_CREATE, 0666)
@@ -211,7 +216,7 @@ func (e *Engine) initLogs(filePath string) error {
 	}
 	defer file.Close()
 
-	// add a dummy log to make log index start at 1
+	// Add a dummy log to make log index start at 1.
 	e.logs = []*Log{{
 		entry: &pb.AppendEntriesReq_LogEntry{
 			Index: 0,
@@ -224,7 +229,7 @@ func (e *Engine) initLogs(filePath string) error {
 		if err != nil {
 			return fmt.Errorf("Read log failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 		}
-		if log == nil { // EOF
+		if log == nil { // EOF.
 			break
 		}
 		e.logs = append(e.logs, log)
@@ -233,6 +238,7 @@ func (e *Engine) initLogs(filePath string) error {
 	return nil
 }
 
+// initLeaderStates initializes leader-only states.
 func (e *Engine) initLeaderStates() {
 	e.lock.Lock()
 	defer e.lock.Unlock()
@@ -299,6 +305,8 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) *pb.RequestVoteResp 
 	return resp
 }
 
+// atLeastUpToDate returns whether a candidate log with given last log
+// index/term is at least up to date as current node's log.
 func (e *Engine) atLeastUpToDate(lastLogIndex uint64, lastLogTerm uint64) bool {
 	lastLog := e.logs[len(e.logs)-1]
 	if lastLogTerm == lastLog.entry.GetTerm() {
@@ -358,8 +366,9 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) *pb.AppendEntrie
 			}
 		} else {
 			if entry.GetTerm() != e.logs[index].entry.GetTerm() {
-				// conflict entry (same index but different terms), delete the existing entry and all that follow it
-				if err := e.truncateAndAppendLog(newLogFromPb(entry)); err != nil {
+				// Conflicting entries (same index but different terms):
+				// Delete the existing entry and all that follow it.
+				if err := e.truncAppendLog(newLogFromPb(entry)); err != nil {
 					e.logger.Error("Truncate and append log failed | err=[%v]", err)
 					return resp
 				}
@@ -369,7 +378,7 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) *pb.AppendEntrie
 	}
 
 	if req.GetLeaderCommit() > e.commitIndex {
-		e.commitIndex = min(req.GetLeaderCommit(), uint64(len(e.logs)-1))
+		e.commitIndex = algo.Min(req.GetLeaderCommit(), uint64(len(e.logs)-1))
 		if err := e.apply(); err != nil {
 			e.logger.Error("Apply failed | err=[%w]", err)
 			return resp
@@ -381,6 +390,7 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) *pb.AppendEntrie
 	return resp
 }
 
+// appendLog appends a raft log to logs on disk.
 func (e *Engine) appendLog(log *Log) error {
 
 	filePath := path.Join(e.raftdir, fileLogs)
@@ -390,16 +400,19 @@ func (e *Engine) appendLog(log *Log) error {
 	}
 	defer file.Close()
 
-	// append
+	// Append.
 	if err := log.write(file); err != nil {
 		return fmt.Errorf("Write log file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 	}
 
+	// Update in-memory logs.
 	e.logs = append(e.logs, log)
+
 	return nil
 }
 
-func (e *Engine) truncateAndAppendLog(log *Log) error {
+// truncAppendLog deletes all logs on disk starting at given log's index and append the given log.
+func (e *Engine) truncAppendLog(log *Log) error {
 
 	filePath := path.Join(e.raftdir, fileLogs)
 	file, err := os.OpenFile(filePath, os.O_WRONLY, 0666)
@@ -408,31 +421,34 @@ func (e *Engine) truncateAndAppendLog(log *Log) error {
 	}
 	defer file.Close()
 
-	// compute file size to retain after truncate
+	// Calculate file size to retain after truncate.
 	size := int64(0)
 	for i := uint64(1); i < log.entry.GetIndex(); i++ {
 		size += e.logs[i].size()
 	}
 
-	// truncate
+	// Truncate.
 	if err := file.Truncate(size); err != nil {
 		return fmt.Errorf("Truncate log file failed | log=%v | path=%v | states=%v | err=[%w]", log, filePath, e, err)
 	}
 
-	// seek to file end
+	// Seek to file end.
 	if _, err := file.Seek(0, io.SeekEnd); err != nil {
 		return fmt.Errorf("Seek log file failed | log=%v | path=%v | states=%v | err=[%w]", log, filePath, e, err)
 	}
 
-	// append
+	// Append.
 	if err := log.write(file); err != nil {
 		return fmt.Errorf("Write log file failed | path=%v | states=%v | err=[%w]", filePath, e, err)
 	}
 
+	// Update in-memory logs.
 	e.logs = append(e.logs[:log.entry.GetIndex()], log)
+
 	return nil
 }
 
+// cancelElectionTimeout cancels running election timer.
 func (e *Engine) cancelElectionTimeout() {
 	select {
 	case e.electionTimeoutCanceled <- struct{}{}:
@@ -458,6 +474,7 @@ func (e *Engine) Run() error {
 	}
 }
 
+// follower executes raft follower's rules.
 func (e *Engine) follower() {
 	e.electionTimer.start()
 	select {
@@ -471,6 +488,7 @@ func (e *Engine) follower() {
 	}
 }
 
+// candidate executes raft candidate's rules.
 func (e *Engine) candidate() {
 	e.lock.Lock()
 
@@ -505,6 +523,7 @@ func (e *Engine) candidate() {
 	}
 }
 
+// setCurrentTerm sets currentTerm to newTerm.
 func (e *Engine) setCurrentTerm(newTerm uint64) error {
 
 	filePath := path.Join(e.raftdir, fileCurrentTerm)
@@ -524,6 +543,7 @@ func (e *Engine) setCurrentTerm(newTerm uint64) error {
 	return nil
 }
 
+// setVotedFor sets votedFor to nodeID.
 func (e *Engine) setVotedFor(nodeID int32) error {
 
 	filePath := path.Join(e.raftdir, fileVotedFor)
@@ -543,7 +563,9 @@ func (e *Engine) setVotedFor(nodeID int32) error {
 	return nil
 }
 
-func (e *Engine) broadcastRequestVote(majority chan struct{}) {
+// broadcastRequestVote sends RequestVote RPCs to each other nodes in parallel.
+// If votes granted by majority of nodes, a dummy value will be sent to majority channel.
+func (e *Engine) broadcastRequestVote(majority chan<- struct{}) {
 	votes := make(chan bool)
 
 	for id := int32(0); id < e.clusterMeta.Size(); id++ {
@@ -564,6 +586,9 @@ func (e *Engine) broadcastRequestVote(majority chan struct{}) {
 	}
 }
 
+// requestVote sends a RequestVote RPC to the node with id targetID.
+// If the target node grants the vote, a true value will be sent to votes channel.
+// Otherwise, a false value will be sent.
 func (e *Engine) requestVote(targetID int32, votes chan bool) {
 	e.lock.Lock()
 	lastLog := e.logs[len(e.logs)-1]
@@ -594,6 +619,7 @@ func (e *Engine) requestVote(targetID int32, votes chan bool) {
 	votes <- resp.VoteGranted
 }
 
+// requestVoteRPC sends a RequestVote RPC request req to the node with id targetID.
 func (e *Engine) requestVoteRPC(targetID int32, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(rpcTimeout)*time.Millisecond)
 	defer cancel()
@@ -609,11 +635,11 @@ func (e *Engine) requestVoteRPC(targetID int32, req *pb.RequestVoteReq) (*pb.Req
 func (e *Engine) Persist(log *Log) error {
 	e.lock.Lock()
 
-	// set log index and term
+	// Set log index and term.
 	log.entry.Index = uint64(len(e.logs))
 	log.entry.Term = e.currentTerm
 
-	// append log to disk
+	// Append log to disk.
 	if err := e.appendLog(log); err != nil {
 		e.lock.Unlock()
 		return fmt.Errorf("Append log failed | log=%v | err=[%w]", log, err)
@@ -621,11 +647,11 @@ func (e *Engine) Persist(log *Log) error {
 
 	e.lock.Unlock()
 
-	// add persist task to queue
+	// Push persist task to queue.
 	task := newPersistTask(log.entry.Index)
 	e.queue.push(task)
 
-	// wait task completion
+	// Wait task completion.
 	if !<-task.done {
 		return fmt.Errorf("Persist log task failed | log=%v | err=[%w]", log, task.err)
 	}
@@ -633,6 +659,7 @@ func (e *Engine) Persist(log *Log) error {
 	return nil
 }
 
+// persistNoOp persists a no-op raft log on disk.
 func (e *Engine) persistNoOp() {
 	if err := e.Persist(newNoOpLog()); err != nil {
 		e.logger.Error("Persist no-op log failed | states=%v | err=[%v]", e, err)
@@ -641,6 +668,7 @@ func (e *Engine) persistNoOp() {
 	}
 }
 
+// leader executes raft leader's rules.
 func (e *Engine) leader() {
 	e.initLeaderStates()
 	go e.persistNoOp()
@@ -656,13 +684,15 @@ func (e *Engine) leader() {
 		}
 
 		e.lock.Lock()
-		if task != nil && e.lastApplied >= task.logIndex {
+		if task != nil && e.lastApplied >= task.index {
 			e.lock.Unlock()
 			task.done <- true
 			continue
 		}
 		e.lock.Unlock()
 
+		// TODO endless retry when convertToFollower() is called: leader should be exited immediately.
+		// Otherwise AppendEntries will be sent will higher term, triggering two leaders fault.
 		for !e.broadcastAppendEntries() {
 			e.logger.Error("AppendEntries failed to succeed on majority (retry after %v ms) | task=%v",
 				heartbeatInterval, task)
@@ -684,7 +714,7 @@ func (e *Engine) leader() {
 		if task == nil {
 			e.lock.Unlock()
 		} else {
-			if e.lastApplied < task.logIndex {
+			if e.lastApplied < task.index {
 				panic(fmt.Sprintf("Expect persist task log applied (error most likely caused by incorrect raft"+
 					" implementation) | task=%v | states=%v", task, e))
 			}
@@ -696,6 +726,8 @@ func (e *Engine) leader() {
 	e.logger.Info("Leader exited | states=%v", e)
 }
 
+// broadcastAppendEntries sends AppendEntries RPCs to each other nodes in parallel.
+// Return true if majority of nodes successfully complete the request, false otherwise.
 func (e *Engine) broadcastAppendEntries() bool {
 	suc := make(chan bool)
 
@@ -715,6 +747,9 @@ func (e *Engine) broadcastAppendEntries() bool {
 	return e.isMajority(numSuc)
 }
 
+// appendEntries sends AppendEntries RPC to the node with id targetID.
+// If the target node successfully completes the request, a true value will be sent to suc channel.
+// Otherwise, a false value will be sent.
 func (e *Engine) appendEntries(targetID int32, suc chan bool) {
 	e.lock.Lock()
 
@@ -762,7 +797,7 @@ func (e *Engine) appendEntries(targetID int32, suc chan bool) {
 			e.matchIndex[targetID] = newNextIndex - 1
 			e.commit(nextIndex, newNextIndex)
 		} else {
-			e.nextIndex[targetID] = max(1, e.nextIndex[targetID]-1)
+			e.nextIndex[targetID] = algo.Max(1, e.nextIndex[targetID]-1)
 		}
 	}
 
@@ -770,6 +805,7 @@ func (e *Engine) appendEntries(targetID int32, suc chan bool) {
 	suc <- resp.GetSuccess()
 }
 
+// appendEntriesRPC sends AppendEntries RPC request to the node with id targetID.
 func (e *Engine) appendEntriesRPC(targetID int32, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(rpcTimeout)*time.Millisecond)
 	defer cancel()
@@ -781,10 +817,11 @@ func (e *Engine) appendEntriesRPC(targetID int32, req *pb.AppendEntriesReq) (*pb
 	return resp, nil
 }
 
+// commit scans raft logs from begIndex to endIndex (not included) and updates commitIndex if possible.
 func (e *Engine) commit(begIndex uint64, endIndex uint64) {
 	for i := begIndex; i < endIndex; i++ {
 		if i > e.commitIndex && e.logs[i].entry.GetTerm() == e.currentTerm {
-			numMatch := int32(1) // log[i] already replicated on current node
+			numMatch := int32(1) // log[i] already replicated on current node.
 			for id := int32(0); id < e.clusterMeta.Size(); id++ {
 				if id != e.clusterMeta.NodeIDSelf() && e.matchIndex[id] >= i {
 					numMatch++
@@ -799,6 +836,7 @@ func (e *Engine) commit(begIndex uint64, endIndex uint64) {
 	}
 }
 
+// apply invokes user-supplied function to apply raft logs.
 func (e *Engine) apply() error {
 	for ; e.commitIndex > e.lastApplied; e.lastApplied++ {
 		log := e.logs[e.lastApplied+1]
@@ -809,6 +847,7 @@ func (e *Engine) apply() error {
 	return nil
 }
 
+// convertToFollower sets current role to follower and updates states.
 func (e *Engine) convertToFollower(newTerm uint64) error {
 	if err := e.setVotedFor(e.clusterMeta.NodeIDNil()); err != nil {
 		return fmt.Errorf("Reset votedFor failed | newTerm=%v | err=[%w]", newTerm, err)
@@ -820,20 +859,7 @@ func (e *Engine) convertToFollower(newTerm uint64) error {
 	return nil
 }
 
+// isMajority returns whether a given number num is a majority of cluster size.
 func (e *Engine) isMajority(num int32) bool {
 	return num > e.clusterMeta.Size()/2
-}
-
-func min(a uint64, b uint64) uint64 {
-	if a <= b {
-		return a
-	}
-	return b
-}
-
-func max(a uint64, b uint64) uint64 {
-	if a >= b {
-		return a
-	}
-	return b
 }

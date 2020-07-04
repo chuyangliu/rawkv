@@ -1,10 +1,11 @@
+// Package cluster provides methods to get cluster information.
 package cluster
 
 import (
 	"github.com/chuyangliu/rawkv/pkg/pb"
 )
 
-// Meta provides information of nodes in the cluster.
+// Meta provides information of nodes in a cluster.
 type Meta interface {
 	// NodeIDNil returns the nil value of node id.
 	NodeIDNil() int32

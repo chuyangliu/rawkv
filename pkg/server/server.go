@@ -1,3 +1,4 @@
+// Package server implements a server to handle grpc requests to the storage engine and raft engine.
 package server
 
 import (
@@ -23,9 +24,10 @@ var _ pb.StorageServer = (*Server)(nil)
 // Assert *Server implements pb.RaftServer.
 var _ pb.RaftServer = (*Server)(nil)
 
-// Server manages the server running on node.
+// Server serves grpc requests coming from storage and raft clients.
 type Server struct {
-	logger      *logging.Logger
+	logger *logging.Logger
+
 	rootdir     string
 	flushThresh store.KVLen
 	blockSize   store.KVLen
@@ -38,55 +40,58 @@ type Server struct {
 	shardMgr    *shardmgr.Manager
 }
 
-// New instantiates a Server.
-func New(logLevel int, rootdir string, flushThresh store.KVLen, blockSize store.KVLen) (*Server, error) {
+// New creates a Server with given logging level and storage engine configurations.
+func New(level int, rootdir string, flushThresh store.KVLen, blockSize store.KVLen) (*Server, error) {
 
-	// create root directory
 	if err := os.MkdirAll(rootdir, 0777); err != nil {
 		return nil, fmt.Errorf("Create root directory failed | rootdir=%v | err=[%w]", rootdir, err)
 	}
 
 	return &Server{
-		logger:      logging.New(logLevel),
+		logger: logging.New(level),
+
 		rootdir:     rootdir,
 		flushThresh: flushThresh,
 		blockSize:   blockSize,
-		initDone:    false,
+
+		initDone: false,
 	}, nil
 }
 
-// Serve runs the server instance and start handling incoming requests.
+// Serve starts a storage grpc server (listening to storageAddr) and a raft grpc server (listening to raftAddr)
+// to handle incoming requests.
 func (s *Server) Serve(storageAddr string, raftAddr string) error {
 	var err error
 
-	// start grpc servers
+	// Start grpc servers.
 	go s.serveStorage(storageAddr)
 	go s.serveRaft(raftAddr)
 
-	// create cluster meta
+	// Create cluster meta.
 	s.clusterMeta, err = cluster.NewKubeMeta(s.logger.Level())
 	if err != nil {
 		return fmt.Errorf("Create cluster meta failed | err=[%w]", err)
 	}
 
-	// create raft engine
+	// Create raft engine.
 	s.raftEngine, err = raft.NewEngine(s.logger.Level(), s.rootdir, s.clusterMeta)
 	if err != nil {
 		return fmt.Errorf("Create raft engine failed | rootdir=%v | err=[%w]", s.rootdir, err)
 	}
 
-	// create shard manager
+	// Create shard manager.
 	s.shardMgr = shardmgr.New(s.logger.Level(), s.rootdir, s.flushThresh, s.blockSize, s.raftEngine)
 
-	// signal init complete
+	// Signal initialization completed.
 	s.setInitDone()
 
-	// start raft engine
+	// Start raft engine.
 	s.raftEngine.Run()
 
 	return nil
 }
 
+// serveStorage starts a storage grpc server listening to addr.
 func (s *Server) serveStorage(addr string) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -101,6 +106,7 @@ func (s *Server) serveStorage(addr string) {
 	}
 }
 
+// serveRaft starts a raft grpc server listening to addr.
 func (s *Server) serveRaft(addr string) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -115,12 +121,14 @@ func (s *Server) serveRaft(addr string) {
 	}
 }
 
+// setInitDone records that initialization has finished.
 func (s *Server) setInitDone() {
 	s.initDoneLock.Lock()
 	defer s.initDoneLock.Unlock()
 	s.initDone = true
 }
 
+// isInitDone returns whether initialization has finished.
 func (s *Server) isInitDone() bool {
 	s.initDoneLock.Lock()
 	defer s.initDoneLock.Unlock()
@@ -131,7 +139,7 @@ func (s *Server) isInitDone() bool {
 // pb.StorageServer Implementation
 // -------------------------------
 
-// Get returns the value associated with the key, and a boolean indicating whether the key exists.
+// Get returns the value associated with given key.
 func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 	s.logger.Debug("Get | key=%v", store.Key(req.GetKey()))
 
@@ -150,14 +158,14 @@ func (s *Server) Get(ctx context.Context, req *pb.GetReq) (*pb.GetResp, error) {
 	}
 
 	return &pb.GetResp{
-		Val:   []byte(val),
+		Value: []byte(val),
 		Found: found,
 	}, nil
 }
 
-// Put adds or updates a key-value pair to the storage.
+// Put adds or updates a key-value pair.
 func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
-	s.logger.Debug("Put | key=%v | val=%v", store.Key(req.GetKey()), store.Value(req.GetVal()))
+	s.logger.Debug("Put | key=%v | val=%v", store.Key(req.GetKey()), store.Value(req.GetValue()))
 
 	if !s.isInitDone() {
 		return nil, ErrNotReady
@@ -175,17 +183,17 @@ func (s *Server) Put(ctx context.Context, req *pb.PutReq) (*pb.PutResp, error) {
 		return s.redirectPut(leaderID, req)
 	}
 
-	err := s.shardMgr.Put(req.GetKey(), req.GetVal())
+	err := s.shardMgr.Put(req.GetKey(), req.GetValue())
 	if err != nil {
 		s.logger.Error("Put key failed | key=%v | val=%v | err=[%v]",
-			store.Key(req.GetKey()), store.Value(req.GetVal()), err)
+			store.Key(req.GetKey()), store.Value(req.GetValue()), err)
 		return nil, ErrInternal
 	}
 
 	return &pb.PutResp{}, nil
 }
 
-// Del removes key from the storage.
+// Del removes a key-value pair.
 func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	s.logger.Debug("Del | key=%v", store.Key(req.GetKey()))
 
@@ -214,13 +222,15 @@ func (s *Server) Del(ctx context.Context, req *pb.DelReq) (*pb.DelResp, error) {
 	return &pb.DelResp{}, nil
 }
 
+// redirectPut redirects a put request to the node with given id.
 func (s *Server) redirectPut(id int32, req *pb.PutReq) (*pb.PutResp, error) {
 	resp, err := s.clusterMeta.StorageClient(id).Put(context.Background(), req)
 	s.logger.Debug("Redirected put request | key=%v | val=%v | err=[%v]",
-		store.Key(req.GetKey()), store.Value(req.GetVal()), err)
+		store.Key(req.GetKey()), store.Value(req.GetValue()), err)
 	return resp, err
 }
 
+// redirectPut redirects a delete request to the node with given id.
 func (s *Server) redirectDel(id int32, req *pb.DelReq) (*pb.DelResp, error) {
 	resp, err := s.clusterMeta.StorageClient(id).Del(context.Background(), req)
 	s.logger.Debug("Redirected delete request | key=%v | err=[%v]", store.Key(req.GetKey()), err)
@@ -231,7 +241,7 @@ func (s *Server) redirectDel(id int32, req *pb.DelReq) (*pb.DelResp, error) {
 // pb.RaftServer Implementation
 // ----------------------------
 
-// RequestVote invoked by candidates to gather votes.
+// RequestVote invoked by raft candidates to gather votes.
 func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.RequestVoteResp, error) {
 
 	if !s.isInitDone() {
@@ -245,7 +255,7 @@ func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.R
 	return s.raftEngine.RequestVoteHandler(req), nil
 }
 
-// AppendEntries invoked by leader to replicate log entries, also used as heartbeat.
+// AppendEntries invoked by raft leader to replicate log entries, also used as heartbeat.
 func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
 
 	if !s.isInitDone() {
