@@ -1,4 +1,4 @@
-// Package main implements a client library to communicate with rawkv backend.
+// Package main implements a command-line tool for clients to communicate with rawkv backend.
 package main
 
 import (
