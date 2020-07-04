@@ -4,17 +4,17 @@ import "fmt"
 
 // persistTask represents a task to persist a raft log.
 type persistTask struct {
-	index uint64    // Index of the log to persist.
-	done  chan bool // Channel to signal task completion.
-	err   error     // Error value if task fails.
+	index   uint64    // Index of the log to persist.
+	success chan bool // Channel to signal whether task succeeds.
+	err     error     // Error value if task fails.
 }
 
 // newPersistTask creates a persistTask to persist raft log at given index.
 func newPersistTask(index uint64) *persistTask {
 	return &persistTask{
-		index: index,
-		done:  make(chan bool),
-		err:   nil,
+		index:   index,
+		success: make(chan bool),
+		err:     nil,
 	}
 }
 
@@ -43,4 +43,9 @@ func (pq *persistQueue) push(task *persistTask) {
 // pop removes and returns the first task in the front of the queue.
 func (pq *persistQueue) pop() chan *persistTask {
 	return pq.queue
+}
+
+// close closes the queue. No further operations can be performed on the queue.
+func (pq *persistQueue) close() {
+	close(pq.queue)
 }

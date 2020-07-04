@@ -252,7 +252,7 @@ func (s *Server) RequestVote(ctx context.Context, req *pb.RequestVoteReq) (*pb.R
 		return nil, ErrCanceled
 	}
 
-	return s.raftEngine.RequestVoteHandler(req), nil
+	return s.raftEngine.RequestVoteHandler(ctx, req), nil
 }
 
 // AppendEntries invoked by raft leader to replicate log entries, also used as heartbeat.
@@ -266,5 +266,5 @@ func (s *Server) AppendEntries(ctx context.Context, req *pb.AppendEntriesReq) (*
 		return nil, ErrCanceled
 	}
 
-	return s.raftEngine.AppendEntriesHandler(req), nil
+	return s.raftEngine.AppendEntriesHandler(ctx, req), nil
 }

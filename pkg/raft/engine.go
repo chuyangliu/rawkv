@@ -67,6 +67,9 @@ type Engine struct {
 	nextIndex  []uint64
 	matchIndex []uint64
 
+	// Queue for leader to handle persistent tasks.
+	queue *persistQueue
+
 	// Leader or follower or candidate.
 	role uint8
 
@@ -81,9 +84,6 @@ type Engine struct {
 
 	// Channel to cancel follower's election timeout.
 	electionTimeoutCanceled chan struct{}
-
-	// Queue to store tasks to persist raft logs.
-	queue *persistQueue
 }
 
 // NewEngine creates an Engine with given logging level, root directory, and cluster meta.
@@ -152,9 +152,6 @@ func (e *Engine) init() error {
 
 	// Init channels.
 	e.electionTimeoutCanceled = make(chan struct{})
-
-	// Init persist queue.
-	e.queue = newPersistQueue(persistQueueLen)
 
 	return nil
 }
@@ -246,6 +243,7 @@ func (e *Engine) initLeaderStates() {
 		e.nextIndex[i] = uint64(len(e.logs))
 		e.matchIndex[i] = 0
 	}
+	e.queue = newPersistQueue(persistQueueLen)
 }
 
 // SetApplyFunc sets raft log apply function to f.
@@ -268,7 +266,7 @@ func (e *Engine) IsLeader() bool {
 }
 
 // RequestVoteHandler handles received RequestVote RPC.
-func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) *pb.RequestVoteResp {
+func (e *Engine) RequestVoteHandler(ctx context.Context, req *pb.RequestVoteReq) *pb.RequestVoteResp {
 
 	resp := &pb.RequestVoteResp{
 		Term:        e.currentTerm,
@@ -277,6 +275,11 @@ func (e *Engine) RequestVoteHandler(req *pb.RequestVoteReq) *pb.RequestVoteResp 
 
 	e.lock.Lock()
 	defer e.lock.Unlock()
+
+	if ctx.Err() == context.Canceled {
+		e.logger.Warn("RequestVote canceled by client | states=%v", e)
+		return nil
+	}
 
 	if req.GetTerm() < e.currentTerm {
 		e.logger.Info("RequestVote received from older term | req=%v | states=%v", req, e)
@@ -316,7 +319,7 @@ func (e *Engine) atLeastUpToDate(lastLogIndex uint64, lastLogTerm uint64) bool {
 }
 
 // AppendEntriesHandler handles received AppendEntries RPC.
-func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) *pb.AppendEntriesResp {
+func (e *Engine) AppendEntriesHandler(ctx context.Context, req *pb.AppendEntriesReq) *pb.AppendEntriesResp {
 
 	resp := &pb.AppendEntriesResp{
 		Term:    e.currentTerm,
@@ -325,6 +328,11 @@ func (e *Engine) AppendEntriesHandler(req *pb.AppendEntriesReq) *pb.AppendEntrie
 
 	e.lock.Lock()
 	defer e.lock.Unlock()
+
+	if ctx.Err() == context.Canceled {
+		e.logger.Warn("AppendEntries canceled by client | states=%v", e)
+		return nil
+	}
 
 	if req.GetTerm() < e.currentTerm {
 		e.logger.Info("AppendEntries received from older term | req=%v | states=%v", req, e)
@@ -491,20 +499,17 @@ func (e *Engine) follower() {
 // candidate executes raft candidate's rules.
 func (e *Engine) candidate() {
 	e.lock.Lock()
+	defer e.lock.Unlock()
 
 	if err := e.setCurrentTerm(e.currentTerm + 1); err != nil {
-		e.lock.Unlock()
 		e.logger.Error("Increase current term failed | err=[%v]", err)
 		return
 	}
 
 	if err := e.setVotedFor(e.clusterMeta.NodeIDSelf()); err != nil {
-		e.lock.Unlock()
 		e.logger.Error("Vote for self failed | err=[%v]", err)
 		return
 	}
-
-	e.lock.Unlock()
 
 	e.electionTimer.start()
 	majority := make(chan struct{})
@@ -515,10 +520,8 @@ func (e *Engine) candidate() {
 		e.logger.Info("Candidate timeout: start new election | states=%v", e)
 	case <-majority:
 		e.electionTimer.stop()
-		e.lock.Lock()
 		e.role = roleLeader
 		e.leaderID = e.clusterMeta.NodeIDSelf()
-		e.lock.Unlock()
 		e.logger.Info("Candidate received votes from majority: new leader elected | states=%v", e)
 	}
 }
@@ -566,11 +569,14 @@ func (e *Engine) setVotedFor(nodeID int32) error {
 // broadcastRequestVote sends RequestVote RPCs to each other nodes in parallel.
 // If votes granted by majority of nodes, a dummy value will be sent to majority channel.
 func (e *Engine) broadcastRequestVote(majority chan<- struct{}) {
+
+	req := e.buildRequestVoteRequest()
 	votes := make(chan bool)
+	mutex := &sync.Mutex{}
 
 	for id := int32(0); id < e.clusterMeta.Size(); id++ {
 		if id != e.clusterMeta.NodeIDSelf() {
-			go e.requestVote(id, votes)
+			go e.requestVote(id, req, votes, mutex)
 		}
 	}
 
@@ -586,19 +592,21 @@ func (e *Engine) broadcastRequestVote(majority chan<- struct{}) {
 	}
 }
 
-// requestVote sends a RequestVote RPC to the node with id targetID.
-// If the target node grants the vote, a true value will be sent to votes channel.
-// Otherwise, a false value will be sent.
-func (e *Engine) requestVote(targetID int32, votes chan bool) {
-	e.lock.Lock()
+// buildRequestVoteRequest builds a RequestVote RPC request.
+func (e *Engine) buildRequestVoteRequest() *pb.RequestVoteReq {
 	lastLog := e.logs[len(e.logs)-1]
-	req := &pb.RequestVoteReq{
+	return &pb.RequestVoteReq{
 		Term:         e.currentTerm,
 		CandidateID:  e.clusterMeta.NodeIDSelf(),
 		LastLogIndex: lastLog.entry.GetIndex(),
 		LastLogTerm:  lastLog.entry.GetTerm(),
 	}
-	e.lock.Unlock()
+}
+
+// requestVote sends a RequestVote RPC request req to the node with id targetID.
+// If the target node grants the vote, a true value will be sent to votes channel.
+// Otherwise, a false value will be sent. The mutex is used to protect concurrent accessess.
+func (e *Engine) requestVote(targetID int32, req *pb.RequestVoteReq, votes chan<- bool, mutex *sync.Mutex) {
 
 	resp, err := e.requestVoteRPC(targetID, req)
 	if err != nil {
@@ -608,13 +616,13 @@ func (e *Engine) requestVote(targetID int32, votes chan bool) {
 		return
 	}
 
-	e.lock.Lock()
+	mutex.Lock()
 	if resp.GetTerm() > e.currentTerm {
 		if err := e.convertToFollower(resp.GetTerm()); err != nil {
 			e.logger.Error("Convert to follower failed | err=[%v]", err)
 		}
 	}
-	e.lock.Unlock()
+	mutex.Unlock()
 
 	votes <- resp.VoteGranted
 }
@@ -632,8 +640,21 @@ func (e *Engine) requestVoteRPC(targetID int32, req *pb.RequestVoteReq) (*pb.Req
 }
 
 // Persist replicates a raft log and applies it to state machine if succeeds.
-func (e *Engine) Persist(log *Log) error {
+func (e *Engine) Persist(log *Log) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Handle panic when sending on a closed queue.
+			err = fmt.Errorf("Persist failed: current node is not the leader | err=[%w]", r)
+		}
+	}()
+
 	e.lock.Lock()
+
+	// Check if current node is the leader.
+	if e.role != roleLeader {
+		e.lock.Unlock()
+		return fmt.Errorf("Persist failed: current node is not the leader | states=%v", e)
+	}
 
 	// Set log index and term.
 	log.entry.Index = uint64(len(e.logs))
@@ -652,7 +673,7 @@ func (e *Engine) Persist(log *Log) error {
 	e.queue.push(task)
 
 	// Wait task completion.
-	if !<-task.done {
+	if !<-task.success {
 		return fmt.Errorf("Persist log task failed | log=%v | err=[%w]", log, task.err)
 	}
 
@@ -670,42 +691,58 @@ func (e *Engine) persistNoOp() {
 
 // leader executes raft leader's rules.
 func (e *Engine) leader() {
+
+	// Reset leader states.
 	e.initLeaderStates()
+
+	// Persist a no-op log.
 	go e.persistNoOp()
 
-	for e.IsLeader() {
+	for {
 		task := (*persistTask)(nil)
 
+		// Wait heartbeat or persist task.
 		e.heartbeatTimer.start()
 		select {
 		case <-e.heartbeatTimer.timeout():
-		case task, _ = <-e.queue.pop():
+		case task = <-e.queue.pop():
 			e.heartbeatTimer.stop()
 		}
 
 		e.lock.Lock()
-		if task != nil && e.lastApplied >= task.index {
+
+		// Check if current node is still the leader.
+		if e.role != roleLeader {
+			e.drainQueue()
 			e.lock.Unlock()
-			task.done <- true
+			if task != nil {
+				task.err = fmt.Errorf("Current node is not the leader | states=%v", e)
+				task.success <- false
+			}
+			break
+		}
+
+		// Check if task has been completed.
+		if task != nil && task.index <= e.lastApplied {
+			e.lock.Unlock()
+			task.success <- true
 			continue
 		}
-		e.lock.Unlock()
 
-		// TODO endless retry when convertToFollower() is called: leader should be exited immediately.
-		// Otherwise AppendEntries will be sent will higher term, triggering two leaders fault.
-		for !e.broadcastAppendEntries() {
-			e.logger.Error("AppendEntries failed to succeed on majority (retry after %v ms) | task=%v",
-				heartbeatInterval, task)
-			time.Sleep(time.Duration(heartbeatInterval) * time.Millisecond)
+		// Replicate logs to other nodes.
+		if !e.broadcastAppendEntries() {
+			e.lock.Unlock()
+			go e.queue.push(task)
+			e.logger.Error("AppendEntries failed to succeed on majority: push task back to queue | task=%v", task)
+			continue
 		}
 
-		e.lock.Lock()
-
+		// Apply logs to state machine.
 		if err := e.apply(); err != nil {
 			e.lock.Unlock()
 			if task != nil {
 				task.err = err
-				task.done <- false
+				task.success <- false
 			}
 			e.logger.Error("Apply logs failed | task=%v | err=[%v]", task, err)
 			continue
@@ -714,44 +751,53 @@ func (e *Engine) leader() {
 		if task == nil {
 			e.lock.Unlock()
 		} else {
-			if e.lastApplied < task.index {
+			if task.index > e.lastApplied {
 				panic(fmt.Sprintf("Expect persist task log applied (error most likely caused by incorrect raft"+
 					" implementation) | task=%v | states=%v", task, e))
 			}
 			e.lock.Unlock()
-			task.done <- true
+			task.success <- true
 		}
 	}
 
 	e.logger.Info("Leader exited | states=%v", e)
 }
 
+// drainQueue closes persist queue and marks all remaining tasks in the queue as failed.
+// This method must be called only when current node is no longer the leader.
+func (e *Engine) drainQueue() {
+	e.queue.close()
+	for task := range e.queue.queue {
+		task.err = fmt.Errorf("Drained task from queue: current node is not the leader | states=%v", e)
+		task.success <- false
+	}
+}
+
 // broadcastAppendEntries sends AppendEntries RPCs to each other nodes in parallel.
 // Return true if majority of nodes successfully complete the request, false otherwise.
 func (e *Engine) broadcastAppendEntries() bool {
-	suc := make(chan bool)
+	success := make(chan bool)
+	mutex := &sync.Mutex{}
 
 	for id := int32(0); id < e.clusterMeta.Size(); id++ {
 		if id != e.clusterMeta.NodeIDSelf() {
-			go e.appendEntries(id, suc)
+			req := e.buildAppendEntriesRequest(id)
+			go e.appendEntries(id, req, success, mutex)
 		}
 	}
 
-	numSuc := int32(1) // start at 1 since logs already replicated on current node
+	numSuccess := int32(1) // start at 1 since logs already replicated on current node
 	for id := int32(0); id < e.clusterMeta.Size(); id++ {
-		if id != e.clusterMeta.NodeIDSelf() && <-suc {
-			numSuc++
+		if id != e.clusterMeta.NodeIDSelf() && <-success {
+			numSuccess++
 		}
 	}
 
-	return e.isMajority(numSuc)
+	return e.isMajority(numSuccess)
 }
 
-// appendEntries sends AppendEntries RPC to the node with id targetID.
-// If the target node successfully completes the request, a true value will be sent to suc channel.
-// Otherwise, a false value will be sent.
-func (e *Engine) appendEntries(targetID int32, suc chan bool) {
-	e.lock.Lock()
+// buildAppendEntriesRequest builds an AppendEntries RPC request to node with given targetID.
+func (e *Engine) buildAppendEntriesRequest(targetID int32) *pb.AppendEntriesReq {
 
 	nextIndex := e.nextIndex[targetID]
 	prevLog := e.logs[nextIndex-1]
@@ -769,43 +815,59 @@ func (e *Engine) appendEntries(targetID int32, suc chan bool) {
 		req.Entries = append(req.Entries, e.logs[i].entry)
 	}
 
-	e.lock.Unlock()
+	return req
+}
+
+// appendEntries sends AppendEntries RPC request req to the node with id targetID.
+// If the target node successfully completes the request, a true value will be sent to success channel.
+// Otherwise, a false value will be sent. The mutex is used to protect concurrent accessess.
+func (e *Engine) appendEntries(targetID int32, req *pb.AppendEntriesReq, success chan<- bool, mutex *sync.Mutex) {
 
 	resp, err := e.appendEntriesRPC(targetID, req)
 	if err != nil {
 		e.logger.Error("AppendEntries failed | targetID=%v | req=%v | states=%v | err=[%v]",
 			targetID, req, e, err)
-		suc <- false
+		success <- false
 		return
 	}
 
-	e.lock.Lock()
+	mutex.Lock()
+
+	if e.role != roleLeader {
+		mutex.Unlock()
+		success <- false
+		return
+	}
 
 	if resp.GetTerm() > e.currentTerm {
 		if err := e.convertToFollower(resp.GetTerm()); err != nil {
 			e.logger.Error("Convert to follower failed | err=[%v]", err)
 		}
-		e.lock.Unlock()
-		suc <- resp.GetSuccess()
+		mutex.Unlock()
+		success <- resp.GetSuccess()
 		return
 	}
 
+	mutex.Unlock()
+
 	if len(req.Entries) > 0 {
 		if resp.GetSuccess() {
+			nextIndex := e.nextIndex[targetID]
 			newNextIndex := nextIndex + uint64(len(req.Entries))
 			e.nextIndex[targetID] = newNextIndex
 			e.matchIndex[targetID] = newNextIndex - 1
+			mutex.Lock()
 			e.commit(nextIndex, newNextIndex)
+			mutex.Unlock()
 		} else {
 			e.nextIndex[targetID] = algo.Max(1, e.nextIndex[targetID]-1)
 		}
 	}
 
-	e.lock.Unlock()
-	suc <- resp.GetSuccess()
+	success <- resp.GetSuccess()
 }
 
-// appendEntriesRPC sends AppendEntries RPC request to the node with id targetID.
+// appendEntriesRPC sends AppendEntries RPC request req to the node with id targetID.
 func (e *Engine) appendEntriesRPC(targetID int32, req *pb.AppendEntriesReq) (*pb.AppendEntriesResp, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(rpcTimeout)*time.Millisecond)
 	defer cancel()
