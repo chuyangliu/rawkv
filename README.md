@@ -1,6 +1,6 @@
 # RawKV
 
-[![][travis-badge]][travis] [![][goreport-badge]][goreport] [![][godoc-badge]][godoc]
+[![][travis-badge]][travis] [![][godoc-badge]][godoc]
 
 RawKV is a cloud-native distributed key-value database aiming to run on Kubernetes clusters, with focuses on:
 
