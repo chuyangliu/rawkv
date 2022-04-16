@@ -1,6 +1,6 @@
 # RawKV
 
-[![][travis-badge]][travis] [![][goreport-badge]][goreport] [![][godoc-badge]][godoc]
+[![][goreport-badge]][goreport] [![][godoc-badge]][godoc]
 
 RawKV is a cloud-native distributed key-value database aiming to run on Kubernetes clusters, with focuses on:
 
@@ -67,9 +67,6 @@ $ kubectl delete pvc -l app=rawkv
 ## License
 
 See the [LICENSE](./LICENSE.md) file for license rights and limitations.
-
-[travis]: https://travis-ci.org/chuyangliu/rawkv
-[travis-badge]: https://travis-ci.org/chuyangliu/rawkv.svg?branch=master
 
 [goreport]: https://goreportcard.com/report/github.com/chuyangliu/rawkv
 [goreport-badge]: https://goreportcard.com/badge/github.com/chuyangliu/rawkv
