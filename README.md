@@ -66,7 +66,8 @@ $ kubectl delete pvc -l app=rawkv
 
 ## License
 
-See the [LICENSE](./LICENSE.md) file for license rights and limitations.
+See the [COPYING](./COPYING) file for license rights and limitations.
+
 
 [goreport]: https://goreportcard.com/report/github.com/chuyangliu/rawkv
 [goreport-badge]: https://goreportcard.com/badge/github.com/chuyangliu/rawkv
