@@ -27,8 +27,8 @@ func TestBasic(t *testing.T) {
 		{"kpp1", false},
 	}
 
-	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(data), func(i, j int) { data[i], data[j] = data[j], data[i] })
+	seed := time.Now().UnixNano()
+	rand.New(rand.NewSource(seed)).Shuffle(len(data), func(i, j int) { data[i], data[j] = data[j], data[i] })
 
 	m := New(store.KeyCmp)
 	for _, entry := range data {

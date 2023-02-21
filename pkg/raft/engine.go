@@ -644,7 +644,7 @@ func (e *Engine) Persist(log *Log) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Handle panic when sending on a closed queue.
-			err = fmt.Errorf("Persist failed: current node is not the leader | err=[%w]", r)
+			err = fmt.Errorf("Persist failed: current node is not the leader | err=[%v]", r)
 		}
 	}()
 

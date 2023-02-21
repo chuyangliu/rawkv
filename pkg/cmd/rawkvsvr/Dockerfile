@@ -1,4 +1,4 @@
-FROM golang:1.13
+FROM golang:1.20
 WORKDIR /rawkvsvr
 COPY . .
 RUN go install ./pkg/cmd/rawkvsvr
