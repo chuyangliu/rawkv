@@ -19,16 +19,16 @@ Pass unit tests:
 go test ./pkg/...
 ```
 
-Install binaries:
+Install RawKV client:
 
 ```
-go install ./pkg/...
+go install ./pkg/cmd/rawkvcli
 ```
 
-Build docker image:
+Build docker image of RawKV server:
 
 ```
-docker build -t rawkvsvr:latest -f ./pkg/cmd/rawkvsvr/Dockerfile .
+docker build -t rawkvsvr:latest  .
 ```
 
 ### Deploy
@@ -39,30 +39,45 @@ RawKV requires a running Kubernetes cluster to function. Once the cluster has be
 kubectl apply -f rawkv.yaml
 ```
 
-After the deployment succeeds, get exposed port number to the load balancer of RawKV pods:
+Get exposed port number of RawKV load balancer specified under `service/rawkv-lb`:
 
 ```
-kubectl get services
-
-NAME       TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)                   AGE
-...        ...        ...             ...           ...                       ...
-rawkv-lb   NodePort   10.103.220.60   <none>        8000:<exposed port>/TCP   5s
-...        ...        ...             ...           ...                       ...
+kubectl get -f rawkv.yaml
 ```
 
-Use the client binary `rawkvcli` to send requests to the load balancer:
+Use RawKV client `rawkvcli` to send requests to the load balancer:
 
 ```
-$GOPATH/bin/rawkvcli put -key name -val rawkv -addr 127.0.0.1:30000
+$GOPATH/bin/rawkvcli put -addr 127.0.0.1:<port> -key name -val rawkv
+$GOPATH/bin/rawkvcli get -addr 127.0.0.1:<port> -key name
+$GOPATH/bin/rawkvcli del -addr 127.0.0.1:<port> -key name
 ```
 
-The command above sends a put request to add a `(name,rawkv)` key-value pair to RawKV exposed on port `30000`. Use the `-h` option to see more usages of `rawkvcli`.
-
-Stop RawKV services:
+Stop services and clean up:
 
 ```
 kubectl delete -f rawkv.yaml
 kubectl delete pvc -l app=rawkv
+```
+
+### Debug
+
+By default, [`rawkv.yaml`](./rawkv.yaml) creates three RawKV replicas:
+
+```
+kubectl get pods -l app=rawkv
+```
+
+View logs emitted from a replica (index starts with 0):
+
+```
+kubectl logs -f rawkv-<index>
+```
+
+Delete a replica to simulate node crash:
+
+```
+kubectl delete pod rawkv-<index>
 ```
 
 ## License

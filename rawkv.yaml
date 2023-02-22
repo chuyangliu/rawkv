@@ -38,7 +38,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: rawkv-hl
+  name: rawkv-backend
 spec:
   selector:
     app: rawkv
@@ -49,7 +49,7 @@ kind: StatefulSet
 metadata:
   name: rawkv
 spec:
-  serviceName: rawkv-hl
+  serviceName: rawkv-backend
   replicas: 3
   selector:
     matchLabels:
@@ -70,7 +70,7 @@ spec:
             fieldRef:
               fieldPath: metadata.name
         - name: RAWKV_SERVICE_NAME
-          value: rawkv-hl
+          value: rawkv-backend
         - name: RAWKV_NAMESPACE
           valueFrom:
             fieldRef:
