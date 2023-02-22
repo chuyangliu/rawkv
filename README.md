@@ -28,7 +28,7 @@ go install ./pkg/cmd/rawkvcli
 Build docker image of RawKV server:
 
 ```
-docker build -t rawkvsvr:latest  .
+docker build -t rawkvsvr:latest .
 ```
 
 ### Deploy
