@@ -82,7 +82,7 @@ kubectl delete pod rawkv-<index>
 
 ## License
 
-See the [COPYING](./COPYING) file for license rights and limitations.
+See the [LICENSE](./LICENSE) file for license rights and limitations.
 
 [goreport]: https://goreportcard.com/report/github.com/chuyangliu/rawkv
 [goreport-badge]: https://goreportcard.com/badge/github.com/chuyangliu/rawkv
